@@ -535,9 +535,10 @@ This code builds upon following open-source code-bases. Please visit the URLs to
 
 ```
 @misc{xr-teleoperate,
-  author       = {Unitree},
-  title        = {XR-Teleoperate: An Open-Source Teleoperation Framework and Data Collection Toolkit for Embodied Intelligence},
+  author       = {{Unitree Robotics}},
+  title        = {{XR-Teleoperate}: An Open-Source Teleoperation Framework and Data Collection Toolkit for Embodied Intelligence},
   howpublished = {\url{https://github.com/unitreerobotics/xr_teleoperate}},
-  year         = {2025},
+  year         = {2024},
+  note         = {Accessed: 2026-02}
 }
 ```
