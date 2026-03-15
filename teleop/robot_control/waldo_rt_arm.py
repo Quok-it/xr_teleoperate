@@ -5,16 +5,32 @@ import pinocchio as pin
 import zmq
 import threading
 import time
+import os
 
 import logging_mp
 logger_mp = logging_mp.getLogger(__name__)
 
 ARM_NUM_JOINTS = 14
+URDF_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../assets/g1/g1_body29_hand14.urdf')
+URDF_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../assets/g1/')
+
+# joint IDs (1-indexed) for arm joints in g1_body29_hand14 (14 hand joints shift right arm)
+_LEFT_ARM_JOINT_IDS = [16, 17, 18, 19, 20, 21, 22]
+_RIGHT_ARM_JOINT_IDS = [30, 31, 32, 33, 34, 35, 36]
+_ARM_JOINT_IDS = set(_LEFT_ARM_JOINT_IDS + _RIGHT_ARM_JOINT_IDS)
 
 # stream_arm_zmq.py publishes 14x float32 joint angles (radians) via ZMQ PUB
 # in sequential order: left[0:7] + right[7:14]
 # Maps 1:1 to G1_29_ArmController.ctrl_dual_arm() expected order.
 WALDO_ARM_PORT = 5557
+
+# T-pose palms down (reduced model sequential order: left[0:7] + right[7:14])
+# left: sp=0, sr=90, sy=0, e=90, wr=0, wp=0, wy=0
+# right: sp=0, sr=-90, sy=0, e=90, wr=0, wp=0, wy=0
+T_POSE_Q = np.array([
+    0.0, np.radians(90), 0.0, np.radians(90), 0.0, 0.0, 0.0,   # left arm
+    0.0, np.radians(-90), 0.0, np.radians(90), 0.0, 0.0, 0.0,  # right arm
+], dtype=np.float64)
 
 
 class Waldo_Arm_Controller:
@@ -35,9 +51,9 @@ class Waldo_Arm_Controller:
         self.arm_port = arm_port
         self._zmq_connected = False
 
-        # latest joint angles from ZMQ (protected by lock)
+        # latest joint angles from ZMQ (protected by lock), default to t-pose
         self._zmq_lock = threading.Lock()
-        self._q_target = np.zeros(ARM_NUM_JOINTS, dtype=np.float64)
+        self._q_target = T_POSE_Q.copy()
 
         # latest sol_q sent to arm_ctrl (for recording)
         self._action_lock = threading.Lock()
@@ -46,18 +62,16 @@ class Waldo_Arm_Controller:
         # DDS arm controller (handles motor commands, state feedback, velocity clipping)
         self.arm_ctrl = G1_29_ArmController(motion_mode=motion_mode, simulation_mode=simulation_mode)
 
-        # reduced pinocchio model for RNEA torque computation
-        from teleop.robot_control.arm_pink_real import load_model
-        self._rnea_model, self._rnea_data, _, _, _ = load_model()
+        # reduced pinocchio model for RNEA torque computation (arms only, 14 DOF)
+        model_full = pin.buildModelFromUrdf(URDF_PATH)
+        joints_to_lock = [i for i in range(1, model_full.njoints) if i not in _ARM_JOINT_IDS]
+        self._rnea_model = pin.buildReducedModel(model_full, joints_to_lock, pin.neutral(model_full))
+        self._rnea_data = self._rnea_model.createData()
 
-        # start ZMQ subscriber thread
+        # start ZMQ subscriber thread (non-blocking — defaults to t-pose until data arrives)
         self._zmq_thread = threading.Thread(target=self._subscribe_zmq, daemon=True)
         self._zmq_thread.start()
-
-        while not self._zmq_connected:
-            time.sleep(0.1)
-            logger_mp.warning("[Waldo_Arm] Waiting for ZMQ arm data on port %d...", self.arm_port)
-        logger_mp.info("[Waldo_Arm] ZMQ arm data connected.")
+        logger_mp.info("[Waldo_Arm] ZMQ subscriber started on port %d (defaulting to t-pose until data arrives)", self.arm_port)
 
         # start control loop thread
         self._ctrl_thread = threading.Thread(target=self._control_loop, daemon=True)
@@ -99,11 +113,6 @@ class Waldo_Arm_Controller:
                 # read latest joint angle targets from ZMQ
                 with self._zmq_lock:
                     q_target = self._q_target.copy()
-
-                # don't publish until we've received real data
-                if not self._zmq_connected:
-                    time.sleep(1.0 / self.fps)
-                    continue
 
                 # compute feedforward torques via RNEA
                 v = np.zeros(self._rnea_model.nv)
