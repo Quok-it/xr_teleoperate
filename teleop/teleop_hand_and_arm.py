@@ -260,7 +260,11 @@ if __name__ == '__main__':
                 tv_wrapper.render_to_xr(head_img)
 
         logger_mp.info("---------------------🚀start Tracking🚀-------------------------")
+
+        #TODO: begin waldogate, @emily will need to reimplement to enter good state
         arm_ctrl.speed_gradual_max()
+        #TODO: end waldogate
+        
         # main loop. robot start to follow VR user's motion
         while not STOP:
             start_time = time.time()
@@ -315,6 +319,7 @@ if __name__ == '__main__':
             
             # TODO: end waldogate
             
+            # will be skipped if its waldo. 
             # high level control
             if args.input_mode == "controller" and args.motion:
                 # quit teleoperate
@@ -494,7 +499,9 @@ if __name__ == '__main__':
         logger_mp.error(traceback.format_exc())
     finally:
         try:
+            #TODO: begin waldogate, @emily will need to reimplement to enter good state
             arm_ctrl.ctrl_dual_arm_go_home()
+            #TODO: end waldogate
         except Exception as e:
             logger_mp.error(f"Failed to ctrl_dual_arm_go_home: {e}")
         
