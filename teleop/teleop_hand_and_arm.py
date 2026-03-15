@@ -240,11 +240,10 @@ if __name__ == '__main__':
             #      brainco:     6 motors/hand - thumb(2) + fingers(4), inverted normalization [0,1]
             #    Waldo bypasses retargeting since you receive hand joint angles directly from ports.
 
-            # TODO: Waldo arm_ik and arm_ctrl setup
-            # Your arm controller must be able to:
-            #   - Accept joint angle targets from your port data each loop iteration
-            #   - Provide current arm joint state for recording via get_current_dual_arm_q() equivalent
-            #   - Return arms to safe position on exit via ctrl_dual_arm_go_home() equivalent
+            # Waldo arm controller: receives joint angles from stream_arm_zmq.py via ZMQ (port 5557),
+            # computes feedforward torques, and publishes motor commands via DDS.
+            from teleop.robot_control.waldo_rt_arm import Waldo_Arm_Controller
+            arm_ctrl = Waldo_Arm_Controller(motion_mode=args.motion, simulation_mode=args.sim)
 
             # Waldo hand controller: receives joint angles from inference_server via ZMQ,
             # publishes to brainco motors via DDS, updates recording arrays internally.
@@ -319,18 +318,8 @@ if __name__ == '__main__':
         if args.input_mode != "waldo":
             arm_ctrl.speed_gradual_max()
         else:
-            # TODO: Waldo startup
-            # Non-waldo calls arm_ctrl.speed_gradual_max() which ramps the arm velocity limit
-            # linearly from 20.0 to 30.0 rad/s over 5 seconds. This prevents sudden jerks when
-            # the robot first starts tracking. After this, the main loop begins at args.frequency Hz.
-            #
-            # Waldo should:
-            #   - Verify port connections are live and streaming joint angle data
-            #   - Enable motors / transition controllers to operational state
-            #   - Optionally ramp gains or velocity limits for safe startup
-            #   - Confirm hand controller is ready to receive commands
-            # After this block, the main loop will call your controllers at args.frequency Hz (default 30).
-            pass
+            # Waldo arm_ctrl exposes same interface, ramp velocity the same way
+            arm_ctrl.speed_gradual_max()
         #end waldogate
         
         # main loop. robot start to follow VR user's motion
@@ -418,27 +407,11 @@ if __name__ == '__main__':
                 logger_mp.debug(f"ik:\t{round(time_ik_end - time_ik_start, 6)}")
                 arm_ctrl.ctrl_dual_arm(sol_q, sol_tauff)
             else:
-                # TODO: Waldo input for ARMS
-                # Non-waldo does 3 things here:
-                #   1. Reads current arm state from robot:
-                #      current_lr_arm_q  = arm_ctrl.get_current_dual_arm_q()  -> np.array, shape per --arm:
-                #        G1_29: (14,) = left[0:7] + right[7:14]
-                #        G1_23: (10,) = left[0:5] + right[5:10]
-                #        H1_2:  (14,) = left[0:7] + right[7:14]
-                #        H1:    (8,)  = left[0:4] + right[4:8]
-                #      current_lr_arm_dq = arm_ctrl.get_current_dual_arm_dq() -> np.array (same shape, velocities)
-                #   2. Solves IK: converts tele_data 4x4 wrist poses -> target joint angles + torques
-                #      sol_q, sol_tauff = arm_ik.solve_ik(left_wrist_4x4, right_wrist_4x4, current_q, current_dq)
-                #   3. Commands robot: arm_ctrl.ctrl_dual_arm(sol_q, sol_tauff)
-                #      arm_ctrl internally clips velocity to 20-30 rad/s for safety
-                #
-                # Waldo should: read arm joint angles from your port subscriptions and send them
-                # to your arm controller. You receive joint angles directly, so no IK is needed.
-                # Your controller must publish motor commands to the robot (via DDS or your own protocol).
-                # Important: the recording block below needs current_lr_arm_q and sol_q equivalents.
-                # Either store your incoming targets and current state in matching variable names,
-                # or populate the recording variables in the waldo recording block instead.
-                pass
+                # Waldo arms: no main-loop work needed. Waldo_Arm_Controller runs its own
+                # ZMQ subscribe -> DDS publish loop in background threads.
+                # Read state for recording variables used below.
+                current_lr_arm_q = arm_ctrl.get_current_dual_arm_q()
+                sol_q = arm_ctrl.get_arm_action()
             #end waldogate
             # record data
             if args.record:
@@ -515,14 +488,12 @@ if __name__ == '__main__':
                             left_hand_action = dual_hand_action_array[:6]
                             right_hand_action = dual_hand_action_array[-6:]
                     
-                    # TODO: populate from waldo arm controller once implemented
-                    
                     current_body_state = []
                     current_body_action = []
-                    left_arm_state = []
-                    right_arm_state = []
-                    left_arm_action = []
-                    right_arm_action = []
+                    left_arm_state = current_lr_arm_q[:7]
+                    right_arm_state = current_lr_arm_q[-7:]
+                    left_arm_action = sol_q[:7]
+                    right_arm_action = sol_q[-7:]
                 #end waldogate
                 else:
                     left_ee_state = []
@@ -642,20 +613,9 @@ if __name__ == '__main__':
             if args.input_mode != "waldo":
                 arm_ctrl.ctrl_dual_arm_go_home()
             else:
-                # TODO: Waldo shutdown
-                # Non-waldo calls arm_ctrl.ctrl_dual_arm_go_home() which:
-                #   1. Reads current arm joint positions
-                #   2. Interpolates linearly from current position to home position over ~2 seconds
-                #   3. Publishes interpolated joint targets at 250Hz via DDS
-                #   4. Home position is the robot's default standing pose (arms at sides)
-                # This runs synchronously and blocks until the arms reach home.
-                #
-                # Waldo should:
-                #   - Command your arm controller to return to a safe resting position
-                #   - Command your hand controller to open/release grip
-                #   - Close port subscriptions and clean up any resources
-                #   - Block until the robot is in a safe state before continuing to the rest of finally
-                pass
+                # Waldo shutdown: return arms home, stop background threads
+                arm_ctrl.ctrl_dual_arm_go_home()
+                arm_ctrl.stop()
         except Exception as e:
             logger_mp.error(f"Failed to ctrl_dual_arm_go_home: {e}")
         #end waldogate
