@@ -47,6 +47,9 @@ _FULL_RIGHT_ARM_IDX = [29, 30, 31, 32, 33, 34, 35]
 # interleaved L/R output order (full model q-indices)
 REORDER_IDX = [15, 29, 16, 30, 17, 31, 18, 32, 19, 33, 20, 34, 21, 35]
 
+# sequential output order: left[0:7] then right[7:14] (matches G1_29_ArmController)
+SEQUENTIAL_IDX = _FULL_LEFT_ARM_IDX + _FULL_RIGHT_ARM_IDX
+
 JOINT_NAMES_INTERLEAVED = [
     "L_shoulder_pitch", "R_shoulder_pitch",
     "L_shoulder_roll",  "R_shoulder_roll",
@@ -849,7 +852,7 @@ def _run_continuous(v, left_tracker, right_tracker, waist_tracker,
                 viz.display(q_full)
 
             if frame_callback is not None:
-                joints_rad = np.array([q_full[REORDER_IDX[i]] for i in range(14)],
+                joints_rad = np.array([q_full[SEQUENTIAL_IDX[i]] for i in range(14)],
                                       dtype=np.float32)
                 frame_callback(joints_rad)
 
