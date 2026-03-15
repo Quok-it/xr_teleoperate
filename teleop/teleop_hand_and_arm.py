@@ -74,7 +74,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # basic control parameters
     parser.add_argument('--frequency', type = float, default = 30.0, help = 'control and record \'s frequency')
-    parser.add_argument('--input-mode', type=str, choices=['hand', 'controller'], default='hand', help='Select XR device input tracking source')
+    parser.add_argument('--input-mode', type=str, choices=['hand', 'controller', 'waldo'], default='hand', help='Select XR device input tracking source')
     parser.add_argument('--display-mode', type=str, choices=['immersive', 'ego', 'pass-through'], default='immersive', help='Select XR device display mode')
     parser.add_argument('--arm', type=str, choices=['G1_29', 'G1_23', 'H1_2', 'H1'], default='G1_29', help='Select arm controller')
     parser.add_argument('--ee', type=str, choices=['dex1', 'dex3', 'inspire_ftp', 'inspire_dfx', 'brainco'], help='Select end effector controller')
@@ -144,70 +144,114 @@ if __name__ == '__main__':
             status, result = motion_switcher.Enter_Debug_Mode()
             logger_mp.info(f"Enter debug mode: {'Success' if status == 0 else 'Failed'}")
         
-        
-        # TODO: begin waldo gating
-        # arm
-        if args.arm == "G1_29":
-            arm_ik = G1_29_ArmIK()
-            arm_ctrl = G1_29_ArmController(motion_mode=args.motion, simulation_mode=args.sim)
-        elif args.arm == "G1_23":
-            arm_ik = G1_23_ArmIK()
-            arm_ctrl = G1_23_ArmController(motion_mode=args.motion, simulation_mode=args.sim)
-        elif args.arm == "H1_2":
-            arm_ik = H1_2_ArmIK()
-            arm_ctrl = H1_2_ArmController(motion_mode=args.motion, simulation_mode=args.sim)
-        elif args.arm == "H1":
-            arm_ik = H1_ArmIK()
-            arm_ctrl = H1_ArmController(simulation_mode=args.sim)
+        # begin waldogate
+        if args.input_mode != "waldo":
+            # arm
+            if args.arm == "G1_29":
+                arm_ik = G1_29_ArmIK()
+                arm_ctrl = G1_29_ArmController(motion_mode=args.motion, simulation_mode=args.sim)
+            elif args.arm == "G1_23":
+                arm_ik = G1_23_ArmIK()
+                arm_ctrl = G1_23_ArmController(motion_mode=args.motion, simulation_mode=args.sim)
+            elif args.arm == "H1_2":
+                arm_ik = H1_2_ArmIK()
+                arm_ctrl = H1_2_ArmController(motion_mode=args.motion, simulation_mode=args.sim)
+            elif args.arm == "H1":
+                arm_ik = H1_ArmIK()
+                arm_ctrl = H1_ArmController(simulation_mode=args.sim)
 
-        # end-effector
-        if args.ee == "dex3":
-            from teleop.robot_control.robot_hand_unitree import Dex3_1_Controller
-            left_hand_pos_array = Array('d', 75, lock = True)      # [input]
-            right_hand_pos_array = Array('d', 75, lock = True)     # [input]
-            dual_hand_data_lock = Lock()
-            dual_hand_state_array = Array('d', 14, lock = False)   # [output] current left, right hand state(14) data.
-            dual_hand_action_array = Array('d', 14, lock = False)  # [output] current left, right hand action(14) data.
-            hand_ctrl = Dex3_1_Controller(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock, 
-                                          dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
-        elif args.ee == "dex1":
-            from teleop.robot_control.robot_hand_unitree import Dex1_1_Gripper_Controller
-            left_gripper_value = Value('d', 0.0, lock=True)        # [input]
-            right_gripper_value = Value('d', 0.0, lock=True)       # [input]
-            dual_gripper_data_lock = Lock()
-            dual_gripper_state_array = Array('d', 2, lock=False)   # current left, right gripper state(2) data.
-            dual_gripper_action_array = Array('d', 2, lock=False)  # current left, right gripper action(2) data.
-            gripper_ctrl = Dex1_1_Gripper_Controller(left_gripper_value, right_gripper_value, dual_gripper_data_lock, 
-                                                     dual_gripper_state_array, dual_gripper_action_array, simulation_mode=args.sim)
-        elif args.ee == "inspire_dfx":
-            from teleop.robot_control.robot_hand_inspire import Inspire_Controller_DFX
-            left_hand_pos_array = Array('d', 75, lock = True)      # [input]
-            right_hand_pos_array = Array('d', 75, lock = True)     # [input]
-            dual_hand_data_lock = Lock()
-            dual_hand_state_array = Array('d', 12, lock = False)   # [output] current left, right hand state(12) data.
-            dual_hand_action_array = Array('d', 12, lock = False)  # [output] current left, right hand action(12) data.
-            hand_ctrl = Inspire_Controller_DFX(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock, dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
-        elif args.ee == "inspire_ftp":
-            from teleop.robot_control.robot_hand_inspire import Inspire_Controller_FTP
-            left_hand_pos_array = Array('d', 75, lock = True)      # [input]
-            right_hand_pos_array = Array('d', 75, lock = True)     # [input]
-            dual_hand_data_lock = Lock()
-            dual_hand_state_array = Array('d', 12, lock = False)   # [output] current left, right hand state(12) data.
-            dual_hand_action_array = Array('d', 12, lock = False)  # [output] current left, right hand action(12) data.
-            hand_ctrl = Inspire_Controller_FTP(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock, dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
-        elif args.ee == "brainco":
-            from teleop.robot_control.robot_hand_brainco import Brainco_Controller
-            left_hand_pos_array = Array('d', 75, lock = True)      # [input]
-            right_hand_pos_array = Array('d', 75, lock = True)     # [input]
-            dual_hand_data_lock = Lock()
-            dual_hand_state_array = Array('d', 12, lock = False)   # [output] current left, right hand state(12) data.
-            dual_hand_action_array = Array('d', 12, lock = False)  # [output] current left, right hand action(12) data.
-            hand_ctrl = Brainco_Controller(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock, 
-                                           dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
+            # end-effector
+            if args.ee == "dex3":
+                from teleop.robot_control.robot_hand_unitree import Dex3_1_Controller
+                left_hand_pos_array = Array('d', 75, lock = True)
+                right_hand_pos_array = Array('d', 75, lock = True)
+                dual_hand_data_lock = Lock()
+                dual_hand_state_array = Array('d', 14, lock = False)
+                dual_hand_action_array = Array('d', 14, lock = False)
+                hand_ctrl = Dex3_1_Controller(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock,
+                                              dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
+            elif args.ee == "dex1":
+                from teleop.robot_control.robot_hand_unitree import Dex1_1_Gripper_Controller
+                left_gripper_value = Value('d', 0.0, lock=True)
+                right_gripper_value = Value('d', 0.0, lock=True)
+                dual_gripper_data_lock = Lock()
+                dual_gripper_state_array = Array('d', 2, lock=False)
+                dual_gripper_action_array = Array('d', 2, lock=False)
+                gripper_ctrl = Dex1_1_Gripper_Controller(left_gripper_value, right_gripper_value, dual_gripper_data_lock,
+                                                         dual_gripper_state_array, dual_gripper_action_array, simulation_mode=args.sim)
+            elif args.ee == "inspire_dfx":
+                from teleop.robot_control.robot_hand_inspire import Inspire_Controller_DFX
+                left_hand_pos_array = Array('d', 75, lock = True)
+                right_hand_pos_array = Array('d', 75, lock = True)
+                dual_hand_data_lock = Lock()
+                dual_hand_state_array = Array('d', 12, lock = False)
+                dual_hand_action_array = Array('d', 12, lock = False)
+                hand_ctrl = Inspire_Controller_DFX(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock, dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
+            elif args.ee == "inspire_ftp":
+                from teleop.robot_control.robot_hand_inspire import Inspire_Controller_FTP
+                left_hand_pos_array = Array('d', 75, lock = True)
+                right_hand_pos_array = Array('d', 75, lock = True)
+                dual_hand_data_lock = Lock()
+                dual_hand_state_array = Array('d', 12, lock = False)
+                dual_hand_action_array = Array('d', 12, lock = False)
+                hand_ctrl = Inspire_Controller_FTP(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock, dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
+            elif args.ee == "brainco":
+                from teleop.robot_control.robot_hand_brainco import Brainco_Controller
+                left_hand_pos_array = Array('d', 75, lock = True)
+                right_hand_pos_array = Array('d', 75, lock = True)
+                dual_hand_data_lock = Lock()
+                dual_hand_state_array = Array('d', 12, lock = False)
+                dual_hand_action_array = Array('d', 12, lock = False)
+                hand_ctrl = Brainco_Controller(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock,
+                                               dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
+            else:
+                pass
         else:
+            # TODO: Waldo init
+            # Non-waldo creates the following. Waldo must produce equivalents:
+            #
+            # 1. arm_ik: IK solver that converts 4x4 SE(3) wrist poses to joint angles.
+            #    - solve_ik(left_wrist_4x4, right_wrist_4x4, current_q, current_dq) -> (sol_q, sol_tauff)
+            #    - sol_q shape depends on --arm:
+            #        G1_29: (14,) = left[0:7] + right[7:14] - shoulder_pitch/roll/yaw, elbow, wrist_roll/pitch/yaw
+            #        G1_23: (10,) = left[0:5] + right[5:10] - shoulder_pitch/roll/yaw, elbow, wrist_roll
+            #        H1_2:  (14,) = left[0:7] + right[7:14] - shoulder_pitch/roll/yaw, elbow_pitch/roll, wrist_pitch/yaw
+            #        H1:    (8,)  = left[0:4] + right[4:8]  - shoulder_pitch/roll/yaw, elbow
+            #    - sol_tauff: feedforward torques (same shape), gravity compensation via pinocchio RNEA.
+            #      Can be zeros if your controller handles gravity comp internally.
+            #    Waldo bypasses IK entirely since you receive joint angles directly from ports.
+            #
+            # 2. arm_ctrl: DDS arm controller with 250Hz background thread publishing motor commands.
+            #    Must expose these methods (used in main loop, recording, and shutdown):
+            #    - ctrl_dual_arm(q_target, tauff_target): send joint angle targets to robot
+            #    - get_current_dual_arm_q() -> np.array: current joint positions (same shape as sol_q)
+            #    - get_current_dual_arm_dq() -> np.array: current joint velocities (same shape)
+            #    - get_current_motor_q() -> np.array: all body motor positions (used in controller recording)
+            #    - ctrl_dual_arm_go_home(): return arms to home position (called in finally block)
+            #    - speed_gradual_max(t=5.0): ramp velocity limit 20->30 rad/s over t seconds (called at startup)
+            #    Safety: velocity clipping at 20-30 rad/s, control_dt = 1/250s
+            #
+            # 3. hand_ctrl: child process reading hand skeleton from shared memory, running DexPilot
+            #    retargeting, and publishing motor commands via DDS. Motor counts per ee type:
+            #      dex3:        7 motors/hand - thumb(3) + index(2) + middle(2), MotorCmds_ via DDS
+            #      dex1:        1 motor/hand  - single gripper, linear map from pinch/trigger distance
+            #      inspire_dfx: 6 motors/hand - fingers(4) + thumb_bend(1) + thumb_rot(1), normalized [0,1]
+            #      inspire_ftp: 6 motors/hand - same joints, proprietary protocol scaled [0-1000]
+            #      brainco:     6 motors/hand - thumb(2) + fingers(4), inverted normalization [0,1]
+            #    Waldo bypasses retargeting since you receive hand joint angles directly from ports.
+
+            # TODO: Waldo arm_ik and arm_ctrl setup
+            # Your arm controller must be able to:
+            #   - Accept joint angle targets from your port data each loop iteration
+            #   - Provide current arm joint state for recording via get_current_dual_arm_q() equivalent
+            #   - Return arms to safe position on exit via ctrl_dual_arm_go_home() equivalent
+
+            # TODO: Waldo hand_ctrl setup
+            # Your hand controller must be able to:
+            #   - Accept hand joint angle targets from your port data each loop iteration
+            #   - Provide current hand joint state for recording (equivalent to dual_hand_state_array)
+            #   - Provide target hand joint actions for recording (equivalent to dual_hand_action_array)
             pass
-        
-        #End waldogate
 
         # affinity mode (if you dont know what it is, then you probably don't need it)
         if args.affinity:
@@ -257,13 +301,28 @@ if __name__ == '__main__':
             time.sleep(0.033)
             if camera_config['head_camera']['enable_zmq'] and xr_need_local_img:
                 head_img = img_client.get_head_frame()
+                #regardless, let it render to headset
                 tv_wrapper.render_to_xr(head_img)
 
         logger_mp.info("---------------------🚀start Tracking🚀-------------------------")
 
-        #TODO: begin waldogate, @emily will need to reimplement to enter good state
-        arm_ctrl.speed_gradual_max()
-        #TODO: end waldogate
+        #begin waldogate
+        if args.input_mode != "waldo":
+            arm_ctrl.speed_gradual_max()
+        else:
+            # TODO: Waldo startup
+            # Non-waldo calls arm_ctrl.speed_gradual_max() which ramps the arm velocity limit
+            # linearly from 20.0 to 30.0 rad/s over 5 seconds. This prevents sudden jerks when
+            # the robot first starts tracking. After this, the main loop begins at args.frequency Hz.
+            #
+            # Waldo should:
+            #   - Verify port connections are live and streaming joint angle data
+            #   - Enable motors / transition controllers to operational state
+            #   - Optionally ramp gains or velocity limits for safe startup
+            #   - Confirm hand controller is ready to receive commands
+            # After this block, the main loop will call your controllers at args.frequency Hz (default 30).
+            pass
+        #end waldogate
         
         # main loop. robot start to follow VR user's motion
         while not STOP:
@@ -272,7 +331,6 @@ if __name__ == '__main__':
             if camera_config['head_camera']['enable_zmq']:
                 if args.record or xr_need_local_img:
                     head_img = img_client.get_head_frame()
-                if xr_need_local_img:
                     tv_wrapper.render_to_xr(head_img)
             if camera_config['left_wrist_camera']['enable_zmq']:
                 if args.record:
@@ -296,28 +354,46 @@ if __name__ == '__main__':
                         publish_reset_category(1, reset_pose_publisher)
 
 
-            # TODO: Begin waldogate
-            # get xr's tele data
-            tele_data = tv_wrapper.get_tele_data()
-            if (args.ee == "dex3" or args.ee == "inspire_dfx" or args.ee == "inspire_ftp" or args.ee == "brainco") and args.input_mode == "hand":
-                with left_hand_pos_array.get_lock():
-                    left_hand_pos_array[:] = tele_data.left_hand_pos.flatten()
-                with right_hand_pos_array.get_lock():
-                    right_hand_pos_array[:] = tele_data.right_hand_pos.flatten()
-            elif args.ee == "dex1" and args.input_mode == "controller":
-                with left_gripper_value.get_lock():
-                    left_gripper_value.value = tele_data.left_ctrl_triggerValue
-                with right_gripper_value.get_lock():
-                    right_gripper_value.value = tele_data.right_ctrl_triggerValue
-            elif args.ee == "dex1" and args.input_mode == "hand":
-                with left_gripper_value.get_lock():
-                    left_gripper_value.value = tele_data.left_hand_pinchValue
-                with right_gripper_value.get_lock():
-                    right_gripper_value.value = tele_data.right_hand_pinchValue
+            #begin waldogate
+            if args.input_mode != "waldo":
+                # get xr's tele data
+                tele_data = tv_wrapper.get_tele_data()
+                if (args.ee == "dex3" or args.ee == "inspire_dfx" or args.ee == "inspire_ftp" or args.ee == "brainco") and args.input_mode == "hand":
+                    with left_hand_pos_array.get_lock():
+                        left_hand_pos_array[:] = tele_data.left_hand_pos.flatten()
+                    with right_hand_pos_array.get_lock():
+                        right_hand_pos_array[:] = tele_data.right_hand_pos.flatten()
+                elif args.ee == "dex1" and args.input_mode == "controller":
+                    with left_gripper_value.get_lock():
+                        left_gripper_value.value = tele_data.left_ctrl_triggerValue
+                    with right_gripper_value.get_lock():
+                        right_gripper_value.value = tele_data.right_ctrl_triggerValue
+                elif args.ee == "dex1" and args.input_mode == "hand":
+                    with left_gripper_value.get_lock():
+                        left_gripper_value.value = tele_data.left_hand_pinchValue
+                    with right_gripper_value.get_lock():
+                        right_gripper_value.value = tele_data.right_hand_pinchValue
+                else:
+                    pass
             else:
+                # TODO: Waldo input for HANDS
+                # Non-waldo calls tv_wrapper.get_tele_data() which returns a TeleData object containing:
+                #   - left/right_hand_pos: np.array (25, 3) - 25 hand skeleton keypoints in 3D
+                #     Written to shared memory as flattened (75,) arrays for the hand controller child
+                #     processes, which run DexPilot retargeting to convert skeleton -> motor joint angles.
+                #   - left/right_hand_pinchValue: float - thumb-index pinch distance (hand mode, dex1)
+                #   - left/right_ctrl_triggerValue: float - controller trigger value (controller mode, dex1)
+                #
+                # Waldo should: read hand joint angles from your port subscriptions and send them
+                # directly to your hand controllers. You receive final motor-level joint angles,
+                # so no retargeting is needed. The data you need to produce per hand:
+                #   dex3:        7 joint angles (radians) - thumb(3) + index(2) + middle(2)
+                #   dex1:        1 value - gripper position
+                #   inspire_dfx: 6 joint angles (normalized [0,1]) - fingers(4) + thumb_bend(1) + thumb_rot(1)
+                #   inspire_ftp: 6 joint angles (scaled [0-1000]) - same joints as dfx
+                #   brainco:     6 joint angles (normalized [0,1]) - thumb(2) + fingers(4)
                 pass
-            
-            # TODO: end waldogate
+            #end waldogate
             
             # will be skipped if its waldo. 
             # high level control
@@ -333,18 +409,41 @@ if __name__ == '__main__':
                 loco_wrapper.Move(-tele_data.left_ctrl_thumbstickValue[1] * 0.3,
                                   -tele_data.left_ctrl_thumbstickValue[0] * 0.3,
                                   -tele_data.right_ctrl_thumbstickValue[0]* 0.3)
-            # TODO: Begin waldogate
-            # get current robot state data.
-            current_lr_arm_q  = arm_ctrl.get_current_dual_arm_q()
-            current_lr_arm_dq = arm_ctrl.get_current_dual_arm_dq()
+            #begin waldogate
+            if args.input_mode != "waldo":
+                # get current robot state data.
+                current_lr_arm_q  = arm_ctrl.get_current_dual_arm_q()
+                current_lr_arm_dq = arm_ctrl.get_current_dual_arm_dq()
 
-            # solve ik using motor data and wrist pose, then use ik results to control arms.
-            time_ik_start = time.time()
-            sol_q, sol_tauff  = arm_ik.solve_ik(tele_data.left_wrist_pose, tele_data.right_wrist_pose, current_lr_arm_q, current_lr_arm_dq)
-            time_ik_end = time.time()
-            logger_mp.debug(f"ik:\t{round(time_ik_end - time_ik_start, 6)}")
-            arm_ctrl.ctrl_dual_arm(sol_q, sol_tauff)
-            #TODO end waldogate
+                # solve ik using motor data and wrist pose, then use ik results to control arms.
+                time_ik_start = time.time()
+                sol_q, sol_tauff  = arm_ik.solve_ik(tele_data.left_wrist_pose, tele_data.right_wrist_pose, current_lr_arm_q, current_lr_arm_dq)
+                time_ik_end = time.time()
+                logger_mp.debug(f"ik:\t{round(time_ik_end - time_ik_start, 6)}")
+                arm_ctrl.ctrl_dual_arm(sol_q, sol_tauff)
+            else:
+                # TODO: Waldo input for ARMS
+                # Non-waldo does 3 things here:
+                #   1. Reads current arm state from robot:
+                #      current_lr_arm_q  = arm_ctrl.get_current_dual_arm_q()  -> np.array, shape per --arm:
+                #        G1_29: (14,) = left[0:7] + right[7:14]
+                #        G1_23: (10,) = left[0:5] + right[5:10]
+                #        H1_2:  (14,) = left[0:7] + right[7:14]
+                #        H1:    (8,)  = left[0:4] + right[4:8]
+                #      current_lr_arm_dq = arm_ctrl.get_current_dual_arm_dq() -> np.array (same shape, velocities)
+                #   2. Solves IK: converts tele_data 4x4 wrist poses -> target joint angles + torques
+                #      sol_q, sol_tauff = arm_ik.solve_ik(left_wrist_4x4, right_wrist_4x4, current_q, current_dq)
+                #   3. Commands robot: arm_ctrl.ctrl_dual_arm(sol_q, sol_tauff)
+                #      arm_ctrl internally clips velocity to 20-30 rad/s for safety
+                #
+                # Waldo should: read arm joint angles from your port subscriptions and send them
+                # to your arm controller. You receive joint angles directly, so no IK is needed.
+                # Your controller must publish motor commands to the robot (via DDS or your own protocol).
+                # Important: the recording block below needs current_lr_arm_q and sol_q equivalents.
+                # Either store your incoming targets and current state in matching variable names,
+                # or populate the recording variables in the waldo recording block instead.
+                pass
+            #end waldogate
             # record data
             if args.record:
                 READY = recorder.is_ready() # now ready to (2) enter RECORD_RUNNING state
@@ -383,6 +482,46 @@ if __name__ == '__main__':
                         right_hand_action = dual_hand_action_array[-6:]
                         current_body_state = []
                         current_body_action = []
+                #begin waldogate
+                elif args.input_mode == "waldo":
+                    # TODO: Waldo recording
+                    # Non-waldo reads end-effector state/action from shared memory arrays populated by
+                    # the hand controller child processes. Each ee type has different joint counts:
+                    #
+                    # End-effector joint specifications (for reference):
+                    #   dex3:        7 joints per hand (14 total) - thumb(3) + index(2) + middle(2)
+                    #   dex1:        1 joint per hand (2 total) - single gripper motor
+                    #   inspire_dfx: 6 joints per hand (12 total) - fingers(4) + thumb_bend(1) + thumb_rot(1)
+                    #   inspire_ftp: 6 joints per hand (12 total) - same as dfx, different protocol
+                    #   brainco:     6 joints per hand (12 total) - thumb(2) + fingers(4)
+                    #
+                    # Arm joint specifications:
+                    #   G1_29/H1_2: 7 joints per arm (14 total) - shoulder(3) + elbow(1) + wrist(3)
+                    #   G1_23:      5 joints per arm (10 total) - shoulder(3) + elbow(1) + wrist_roll(1)
+                    #   H1:         4 joints per arm (8 total) - shoulder(3) + elbow(1)
+                    #
+                    # Waldo should populate these from your own controllers:
+                    #   left_ee_state    - current left hand/gripper joint positions (list, length = ee joint count)
+                    #   right_ee_state   - current right hand/gripper joint positions (list, length = ee joint count)
+                    #   left_hand_action  - target left hand/gripper joint commands sent this frame (list, same length)
+                    #   right_hand_action - target right hand/gripper joint commands sent this frame (list, same length)
+                    #   left_arm_state   - current left arm joint positions (list, length = arm joint count)
+                    #   right_arm_state  - current right arm joint positions (list, length = arm joint count)
+                    #   left_arm_action  - target left arm joint commands sent this frame (list, same length)
+                    #   right_arm_action - target right arm joint commands sent this frame (list, same length)
+                    #   current_body_state  - full body motor positions (list, [] if unused)
+                    #   current_body_action - locomotion commands (list, [] if unused)
+                    left_ee_state = []
+                    right_ee_state = []
+                    left_hand_action = []
+                    right_hand_action = []
+                    current_body_state = []
+                    current_body_action = []
+                    left_arm_state = []
+                    right_arm_state = []
+                    left_arm_action = []
+                    right_arm_action = []
+                #end waldogate
                 else:
                     left_ee_state = []
                     right_ee_state = []
@@ -390,12 +529,10 @@ if __name__ == '__main__':
                     right_hand_action = []
                     current_body_state = []
                     current_body_action = []
-
-                # arm state and action
-                left_arm_state  = current_lr_arm_q[:7]
-                right_arm_state = current_lr_arm_q[-7:]
-                left_arm_action = sol_q[:7]
-                right_arm_action = sol_q[-7:]
+                    left_arm_state  = current_lr_arm_q[:7]
+                    right_arm_state = current_lr_arm_q[-7:]
+                    left_arm_action = sol_q[:7]
+                    right_arm_action = sol_q[-7:]
                 if RECORD_RUNNING:
                     colors = {}
                     depths = {}
@@ -498,12 +635,28 @@ if __name__ == '__main__':
         import traceback
         logger_mp.error(traceback.format_exc())
     finally:
+        #begin waldogate
         try:
-            #TODO: begin waldogate, @emily will need to reimplement to enter good state
-            arm_ctrl.ctrl_dual_arm_go_home()
-            #TODO: end waldogate
+            if args.input_mode != "waldo":
+                arm_ctrl.ctrl_dual_arm_go_home()
+            else:
+                # TODO: Waldo shutdown
+                # Non-waldo calls arm_ctrl.ctrl_dual_arm_go_home() which:
+                #   1. Reads current arm joint positions
+                #   2. Interpolates linearly from current position to home position over ~2 seconds
+                #   3. Publishes interpolated joint targets at 250Hz via DDS
+                #   4. Home position is the robot's default standing pose (arms at sides)
+                # This runs synchronously and blocks until the arms reach home.
+                #
+                # Waldo should:
+                #   - Command your arm controller to return to a safe resting position
+                #   - Command your hand controller to open/release grip
+                #   - Close port subscriptions and clean up any resources
+                #   - Block until the robot is in a safe state before continuing to the rest of finally
+                pass
         except Exception as e:
             logger_mp.error(f"Failed to ctrl_dual_arm_go_home: {e}")
+        #end waldogate
         
         try:
             if args.ipc:
@@ -519,10 +672,13 @@ if __name__ == '__main__':
         except Exception as e:
             logger_mp.error(f"Failed to close image client: {e}")
 
-        try:
-            tv_wrapper.close()
-        except Exception as e:
-            logger_mp.error(f"Failed to close televuer wrapper: {e}")
+        #begin waldogate
+        if args.input_mode != "waldo":
+            try:
+                tv_wrapper.close()
+            except Exception as e:
+                logger_mp.error(f"Failed to close televuer wrapper: {e}")
+        #end waldogate
 
         try:
             if not args.motion:
