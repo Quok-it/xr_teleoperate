@@ -23,6 +23,15 @@ kTopicbraincoRightState = "rt/brainco/right/state"
 WALDO_RIGHT_HAND_PORT = 5555
 WALDO_LEFT_HAND_PORT = 5556
 
+# GeoRT revo2 joint upper limits in radians (lower limits are all 0.0)
+# Order: [thumb_mc, thumb_px, index, middle, ring, pinky]
+_REVO2_UPPER_LIMITS = np.array([1.57, 1.03, 1.41, 1.41, 1.41, 1.41])
+
+def _normalize_to_brainco(q_radians):
+    """Convert GeoRT revo2 joint angles (radians) to brainco motor range [0, 1].
+    0.0 = fully open, 1.0 = fully closed."""
+    return np.clip(q_radians / _REVO2_UPPER_LIMITS, 0.0, 1.0)
+
 
 class Waldo_Brainco_Controller:
     """Brainco hand controller that receives joint angles directly from
@@ -173,16 +182,26 @@ class Waldo_Brainco_Controller:
             while self.running:
                 start_time = time.time()
 
-                # read latest joint angle targets from ZMQ
+                # read latest joint angle targets from ZMQ (in radians from GeoRT)
                 with self._zmq_lock:
-                    left_q_target = self._left_q_target.copy()
-                    right_q_target = self._right_q_target.copy()
+                    left_q_raw = self._left_q_target.copy()
+                    right_q_raw = self._right_q_target.copy()
+
+                # normalize radians to [0, 1] range for brainco motors
+                # GeoRT revo2 outputs radians with lower=0 for all joints.
+                # Brainco expects 0.0 = fully open, 1.0 = fully closed.
+                # Joint upper limits from revo2 config (radians):
+                #   idx 0 (thumb_mc): 1.57,  idx 1 (thumb_px): 1.03
+                #   idx 2 (index):    1.41,  idx 3 (middle):   1.41
+                #   idx 4 (ring):     1.41,  idx 5 (pinky):    1.41
+                left_q_target = _normalize_to_brainco(left_q_raw)
+                right_q_target = _normalize_to_brainco(right_q_raw)
 
                 # read current motor state from DDS feedback
                 with self._state_lock:
                     state_data = np.concatenate((self._left_hand_state.copy(), self._right_hand_state.copy()))
 
-                # build action data for recording
+                # build action data for recording (normalized [0,1] values)
                 action_data = np.concatenate((left_q_target, right_q_target))
 
                 # update recording arrays
