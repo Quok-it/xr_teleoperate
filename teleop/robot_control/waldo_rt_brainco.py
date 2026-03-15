@@ -232,6 +232,7 @@ class Waldo_Brainco_Controller:
 
         self.LeftHandCmd_publisher.Write(self.left_hand_msg)
         self.RightHandCmd_publisher.Write(self.right_hand_msg)
+        print(f"Published DDS commands - Left: {left_q_target}, Right: {right_q_target}")
 
     def get_hand_state(self):
         """Return current hand motor state as (left_state, right_state), each np.array of shape (6,).
