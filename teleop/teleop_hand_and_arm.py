@@ -246,12 +246,21 @@ if __name__ == '__main__':
             #   - Provide current arm joint state for recording via get_current_dual_arm_q() equivalent
             #   - Return arms to safe position on exit via ctrl_dual_arm_go_home() equivalent
 
-            # TODO: Waldo hand_ctrl setup
-            # Your hand controller must be able to:
-            #   - Accept hand joint angle targets from your port data each loop iteration
-            #   - Provide current hand joint state for recording (equivalent to dual_hand_state_array)
-            #   - Provide target hand joint actions for recording (equivalent to dual_hand_action_array)
-            pass
+            # Waldo hand controller: receives joint angles from inference_server via ZMQ,
+            # publishes to brainco motors via DDS, updates recording arrays internally.
+            if args.ee == "brainco":
+                from teleop.robot_control.waldo_rt_brainco import Waldo_Brainco_Controller
+                dual_hand_data_lock = Lock()
+                dual_hand_state_array = Array('d', 12, lock=False)   # [output] left(6) + right(6) hand state
+                dual_hand_action_array = Array('d', 12, lock=False)  # [output] left(6) + right(6) hand action
+                hand_ctrl = Waldo_Brainco_Controller(
+                    dual_hand_data_lock=dual_hand_data_lock,
+                    dual_hand_state_array=dual_hand_state_array,
+                    dual_hand_action_array=dual_hand_action_array,
+                    simulation_mode=args.sim,
+                )
+            else:
+                pass
 
         # affinity mode (if you dont know what it is, then you probably don't need it)
         if args.affinity:
@@ -376,22 +385,9 @@ if __name__ == '__main__':
                 else:
                     pass
             else:
-                # TODO: Waldo input for HANDS
-                # Non-waldo calls tv_wrapper.get_tele_data() which returns a TeleData object containing:
-                #   - left/right_hand_pos: np.array (25, 3) - 25 hand skeleton keypoints in 3D
-                #     Written to shared memory as flattened (75,) arrays for the hand controller child
-                #     processes, which run DexPilot retargeting to convert skeleton -> motor joint angles.
-                #   - left/right_hand_pinchValue: float - thumb-index pinch distance (hand mode, dex1)
-                #   - left/right_ctrl_triggerValue: float - controller trigger value (controller mode, dex1)
-                #
-                # Waldo should: read hand joint angles from your port subscriptions and send them
-                # directly to your hand controllers. You receive final motor-level joint angles,
-                # so no retargeting is needed. The data you need to produce per hand:
-                #   dex3:        7 joint angles (radians) - thumb(3) + index(2) + middle(2)
-                #   dex1:        1 value - gripper position
-                #   inspire_dfx: 6 joint angles (normalized [0,1]) - fingers(4) + thumb_bend(1) + thumb_rot(1)
-                #   inspire_ftp: 6 joint angles (scaled [0-1000]) - same joints as dfx
-                #   brainco:     6 joint angles (normalized [0,1]) - thumb(2) + fingers(4)
+                # Waldo hands: no main-loop work needed. Waldo_Brainco_Controller runs its own
+                # ZMQ subscribe -> DDS publish loop in background threads, and updates the
+                # recording arrays (dual_hand_state_array / dual_hand_action_array) internally.
                 pass
             #end waldogate
             
@@ -511,10 +507,16 @@ if __name__ == '__main__':
                     #   right_arm_action - target right arm joint commands sent this frame (list, same length)
                     #   current_body_state  - full body motor positions (list, [] if unused)
                     #   current_body_action - locomotion commands (list, [] if unused)
-                    left_ee_state = []
-                    right_ee_state = []
-                    left_hand_action = []
-                    right_hand_action = []
+                    # hand ee state/action from Waldo_Brainco_Controller's recording arrays
+                    if args.ee == "brainco":
+                        with dual_hand_data_lock:
+                            left_ee_state = dual_hand_state_array[:6]
+                            right_ee_state = dual_hand_state_array[-6:]
+                            left_hand_action = dual_hand_action_array[:6]
+                            right_hand_action = dual_hand_action_array[-6:]
+                    
+                    # TODO: populate from waldo arm controller once implemented
+                    
                     current_body_state = []
                     current_body_action = []
                     left_arm_state = []
