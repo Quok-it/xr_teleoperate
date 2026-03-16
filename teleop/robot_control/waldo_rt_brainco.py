@@ -52,6 +52,7 @@ class Waldo_Brainco_Controller:
         self.dual_hand_state_array = dual_hand_state_array
         self.dual_hand_action_array = dual_hand_action_array
         self.running = True
+        self._paused = False  # safety clutch: when True, stop sending hand commands
 
         # ZMQ subscriber setup for inference_server joint angles
         self.right_hand_port = right_hand_port
@@ -214,6 +215,13 @@ class Waldo_Brainco_Controller:
                 if not self._zmq_connected:
                     continue
 
+                # safety clutch: only publish hand commands when not paused
+                if self._paused:
+                    elapsed = time.time() - start_time
+                    sleep_time = max(0, (1 / self.fps) - elapsed)
+                    time.sleep(sleep_time)
+                    continue
+
                 # publish motor commands via DDS
                 self._ctrl_dual_hand(left_q_target, right_q_target)
 
@@ -245,6 +253,10 @@ class Waldo_Brainco_Controller:
         For use in recording."""
         with self._zmq_lock:
             return self._left_q_target.copy(), self._right_q_target.copy()
+
+    def set_paused(self, paused):
+        """Set safety clutch state. When paused=True, hand commands are not sent to the robot."""
+        self._paused = paused
 
     def stop(self):
         """Stop all threads and clean up."""

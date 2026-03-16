@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l /c/Users/ahmed/Documents/xr_teleoperate/teleop/robot_control/robot_hand_*.py)"
+    ]
+  }
+}

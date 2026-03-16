@@ -36,6 +36,7 @@ STOP           = False  # Enable to begin system exit procedure
 READY          = False  # Ready to (1) enter START state, (2) enter RECORD_RUNNING state
 RECORD_RUNNING = False  # True if [Recording]
 RECORD_TOGGLE  = False  # Toggle recording state
+CLUTCH         = False  # Safety clutch: True while 'j' is held down, robot only moves when True
 #  -------        ---------                -----------                -----------            ---------
 #   state          [Ready]      ==>        [Recording]     ==>         [AutoSave]     -->     [Ready]
 #  -------        ---------      |         -----------      |         -----------      |     ---------
@@ -49,7 +50,7 @@ RECORD_TOGGLE  = False  # Toggle recording state
 #  --> auto  : Auto-transition after saving data.
 
 def on_press(key):
-    global STOP, START, RECORD_TOGGLE
+    global STOP, START, RECORD_TOGGLE, CLUTCH
     if key == 'r':
         START = True
     elif key == 'q':
@@ -57,17 +58,25 @@ def on_press(key):
         STOP = True
     elif key == 's' and START == True:
         RECORD_TOGGLE = True
+    elif key == 'j':
+        CLUTCH = True
     else:
         logger_mp.warning(f"[on_press] {key} was pressed, but no action is defined for this key.")
 
+def on_release(key):
+    global CLUTCH
+    if key == 'j':
+        CLUTCH = False
+
 def get_state() -> dict:
     """Return current heartbeat state"""
-    global START, STOP, RECORD_RUNNING, READY
+    global START, STOP, RECORD_RUNNING, READY, CLUTCH
     return {
         "START": START,
         "STOP": STOP,
         "READY": READY,
         "RECORD_RUNNING": RECORD_RUNNING,
+        "CLUTCH": CLUTCH,
     }
 
 if __name__ == '__main__':
@@ -106,12 +115,12 @@ if __name__ == '__main__':
 
         # ipc communication mode. client usage: see utils/ipc.py
         if args.ipc:
-            ipc_server = IPC_Server(on_press=on_press,get_state=get_state)
+            ipc_server = IPC_Server(on_press=on_press, on_release=on_release, get_state=get_state)
             ipc_server.start()
         # sshkeyboard communication mode
         else:
-            listen_keyboard_thread = threading.Thread(target=listen_keyboard, 
-                                                      kwargs={"on_press": on_press, "until": None, "sequential": False,}, 
+            listen_keyboard_thread = threading.Thread(target=listen_keyboard,
+                                                      kwargs={"on_press": on_press, "on_release": on_release, "until": None, "sequential": False,},
                                                       daemon=True)
             listen_keyboard_thread.start()
 
@@ -303,6 +312,7 @@ if __name__ == '__main__':
         else:
             logger_mp.info("🔵  Recording is DISABLED (run with --record to enable).")
         logger_mp.info("🔴  Press [q] to stop and exit the program.")
+        logger_mp.info("🟣  Hold  [j] to enable robot movement (safety clutch).")
         logger_mp.info("⚠️  IMPORTANT: Please keep your distance and stay safe.")
         READY = True                  # now ready to (1) enter START state
         while not START and not STOP: # wait for start or stop signal.
@@ -325,6 +335,13 @@ if __name__ == '__main__':
         # main loop. robot start to follow VR user's motion
         while not STOP:
             start_time = time.time()
+
+            # safety clutch: update waldo controller pause state
+            if args.input_mode == "waldo":
+                arm_ctrl.set_paused(not CLUTCH)
+                if args.ee == "brainco":
+                    hand_ctrl.set_paused(not CLUTCH)
+
             # get image
             if camera_config['head_camera']['enable_zmq']:
                 if args.record or xr_need_local_img:

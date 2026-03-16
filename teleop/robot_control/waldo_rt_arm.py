@@ -48,6 +48,7 @@ class Waldo_Arm_Controller:
         self.fps = fps
         self.simulation_mode = simulation_mode
         self.running = True
+        self._paused = False  # safety clutch: when True, stop sending arm commands
         self.arm_port = arm_port
         self._zmq_connected = False
 
@@ -118,8 +119,9 @@ class Waldo_Arm_Controller:
                 v = np.zeros(self._rnea_model.nv)
                 tauff = pin.rnea(self._rnea_model, self._rnea_data, q_target, v, v)
 
-                # send to DDS arm controller
-                self.arm_ctrl.ctrl_dual_arm(q_target, tauff)
+                # safety clutch: only send arm commands when not paused
+                if not self._paused:
+                    self.arm_ctrl.ctrl_dual_arm(q_target, tauff)
 
                 # store for recording
                 with self._action_lock:
@@ -158,6 +160,10 @@ class Waldo_Arm_Controller:
     def speed_gradual_max(self, t=5.0):
         """Ramp arm velocity limit 20->30 rad/s over t seconds."""
         self.arm_ctrl.speed_gradual_max(t)
+
+    def set_paused(self, paused):
+        """Set safety clutch state. When paused=True, arm commands are not sent to the robot."""
+        self._paused = paused
 
     def stop(self):
         """Stop all threads and clean up."""

@@ -64,19 +64,28 @@ class IPC_Server:
         "CMD_START": "r",          # launch
         "CMD_STOP": "q",           # exit
         "CMD_RECORD_TOGGLE": "s",  # start & stop (toggle record)
+        "CMD_CLUTCH_ON": "j",      # engage safety clutch (hold)
     }
 
-    def __init__(self, on_press=None, get_state=None, hb_fps=10.0):
+    # Commands that trigger on_release instead of on_press
+    release_cmd_map = {
+        "CMD_CLUTCH_OFF": "j",     # release safety clutch
+    }
+
+    def __init__(self, on_press=None, on_release=None, get_state=None, hb_fps=10.0):
         """
         Args:
-            on_press  : callback(cmd:str), called for every command
-            get_state : callback() -> dict, provides current heartbeat state
-            hb_fps    : heartbeat publish frequency
+            on_press   : callback(key:str), called for key press commands
+            on_release : callback(key:str), called for key release commands
+            get_state  : callback() -> dict, provides current heartbeat state
+            hb_fps     : heartbeat publish frequency
         """
         if callable(on_press):
             self.on_press = on_press
         else:
             raise ValueError("[IPC_Server] on_press callback function must be provided")
+
+        self.on_release = on_release if callable(on_release) else None
 
         if callable(get_state):
             self.get_state = get_state
@@ -147,10 +156,16 @@ class IPC_Server:
             if not cmd:
                 return {"repid": reqid, "status": "error", "msg": "cmd not provided"}
 
+            # release commands (e.g. CMD_CLUTCH_OFF)
+            if cmd in self.release_cmd_map:
+                if self.on_release:
+                    self.on_release(self.release_cmd_map[cmd])
+                return {"repid": reqid, "status": "ok", "msg": "ok"}
+
             # unsupported cmd
             if cmd not in self.cmd_map:
                 return {"repid": reqid, "status": "error", "msg": f"cmd not supported: {cmd}"}
-                    
+
             # supported cmd path
             self.on_press(self.cmd_map[cmd])
             return {"repid": reqid, "status": "ok", "msg": "ok"}
