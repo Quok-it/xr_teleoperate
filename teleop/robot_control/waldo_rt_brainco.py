@@ -20,8 +20,8 @@ kTopicbraincoRightState = "rt/brainco/right/state"
 # inference_server.py publishes 6 float32 joint angles per hand via ZMQ PUB.
 # revo2 joint order: [thumb_mc, thumb_px, index, middle, ring, pinky]
 # Maps 1:1 to brainco motor order: [thumb, thumb-aux, index, middle, ring, pinky]
-WALDO_RIGHT_HAND_PORT = 5555
-WALDO_LEFT_HAND_PORT = 5556
+WALDO_RIGHT_HAND_PORT = 6767
+WALDO_LEFT_HAND_PORT = 6768
 
 # GeoRT revo2 joint upper limits in radians (lower limits are all 0.0)
 # Order: [thumb_mc, thumb_px, index, middle, ring, pinky]
@@ -232,6 +232,7 @@ class Waldo_Brainco_Controller:
 
         self.LeftHandCmd_publisher.Write(self.left_hand_msg)
         self.RightHandCmd_publisher.Write(self.right_hand_msg)
+        # print(f"Published Brainco Commands - Left: {left_q_target}, Right: {right_q_target}")
 
     def get_hand_state(self):
         """Return current hand motor state as (left_state, right_state), each np.array of shape (6,).
