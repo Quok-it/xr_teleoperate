@@ -289,11 +289,15 @@ if __name__ == '__main__':
 
         # record + headless / non-headless mode
         if args.record:
+            cam_h, cam_w = camera_config['head_camera']['image_shape']
+            if camera_config['head_camera']['binocular']:
+                cam_w = cam_w // 2
             recorder = EpisodeWriter(task_dir = os.path.join(args.task_dir, args.task_name),
                                      task_goal = args.task_goal,
                                      task_desc = args.task_desc,
                                      task_steps = args.task_steps,
-                                     frequency = args.frequency, 
+                                     frequency = args.frequency,
+                                     image_size = [cam_w, cam_h],
                                      rerun_log = not args.headless)
 
         logger_mp.info("----------------------------------------------------------------")
