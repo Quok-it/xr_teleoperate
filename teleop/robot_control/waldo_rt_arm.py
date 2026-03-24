@@ -31,7 +31,7 @@ class Waldo_Arm_Controller:
         logger_mp.info("Initialize Waldo_Arm_Controller...")
         self.fps = fps
         self.simulation_mode = simulation_mode
-        self.running = True
+        self.running = False
         self.arm_port = arm_port
         self._zmq_connected = False
 
@@ -50,6 +50,21 @@ class Waldo_Arm_Controller:
         from teleop.robot_control.arm_pink_real import load_model
         self._rnea_model, self._rnea_data, _, _, _ = load_model()
 
+        # thread references (started by start())
+        self._zmq_thread = None
+        self._ctrl_thread = None
+
+        logger_mp.info("Initialize Waldo_Arm_Controller OK!")
+
+    def start(self):
+        """Start ZMQ subscriber and control loop threads."""
+        if self.running:
+            logger_mp.warning("[Waldo_Arm] Already running, ignoring start()")
+            return
+
+        self.running = True
+        self._zmq_connected = False
+
         # start ZMQ subscriber thread
         self._zmq_thread = threading.Thread(target=self._subscribe_zmq, daemon=True)
         self._zmq_thread.start()
@@ -62,8 +77,6 @@ class Waldo_Arm_Controller:
         # start control loop thread
         self._ctrl_thread = threading.Thread(target=self._control_loop, daemon=True)
         self._ctrl_thread.start()
-
-        logger_mp.info("Initialize Waldo_Arm_Controller OK!")
 
     def _subscribe_zmq(self):
         """Subscribe to stream_arm_zmq.py ZMQ PUB socket for joint angles.
@@ -153,3 +166,9 @@ class Waldo_Arm_Controller:
     def stop(self):
         """Stop all threads and clean up."""
         self.running = False
+        if self._zmq_thread is not None:
+            self._zmq_thread.join(timeout=2.0)
+            self._zmq_thread = None
+        if self._ctrl_thread is not None:
+            self._ctrl_thread.join(timeout=2.0)
+            self._ctrl_thread = None

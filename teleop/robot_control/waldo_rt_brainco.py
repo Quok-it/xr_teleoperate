@@ -51,7 +51,7 @@ class Waldo_Brainco_Controller:
         self.dual_hand_data_lock = dual_hand_data_lock
         self.dual_hand_state_array = dual_hand_state_array
         self.dual_hand_action_array = dual_hand_action_array
-        self.running = True
+        self.running = False
 
         # ZMQ subscriber setup for inference_server joint angles
         self.right_hand_port = right_hand_port
@@ -92,6 +92,23 @@ class Waldo_Brainco_Controller:
             self.right_hand_msg.cmds[i].q = 0.0
             self.right_hand_msg.cmds[i].dq = 1.0
 
+        # thread references (started by start())
+        self._dds_state_thread = None
+        self._zmq_thread = None
+        self._ctrl_thread = None
+
+        logger_mp.info("Initialize Waldo_Brainco_Controller OK!")
+
+    def start(self):
+        """Start DDS state subscriber, ZMQ subscriber, and control loop threads."""
+        if self.running:
+            logger_mp.warning("[Waldo_Brainco] Already running, ignoring start()")
+            return
+
+        self.running = True
+        self.hand_sub_ready = False
+        self._zmq_connected = False
+
         # start DDS state subscriber thread
         self._dds_state_thread = threading.Thread(target=self._subscribe_hand_state, daemon=True)
         self._dds_state_thread.start()
@@ -113,8 +130,6 @@ class Waldo_Brainco_Controller:
         # start control loop thread
         self._ctrl_thread = threading.Thread(target=self._control_loop, daemon=True)
         self._ctrl_thread.start()
-
-        logger_mp.info("Initialize Waldo_Brainco_Controller OK!")
 
     def _subscribe_hand_state(self):
         """Read motor state feedback from DDS (runs in background thread)."""
@@ -256,6 +271,15 @@ class Waldo_Brainco_Controller:
     def stop(self):
         """Stop all threads and clean up."""
         self.running = False
+        if self._dds_state_thread is not None:
+            self._dds_state_thread.join(timeout=2.0)
+            self._dds_state_thread = None
+        if self._zmq_thread is not None:
+            self._zmq_thread.join(timeout=2.0)
+            self._zmq_thread = None
+        if self._ctrl_thread is not None:
+            self._ctrl_thread.join(timeout=2.0)
+            self._ctrl_thread = None
 
 
 # Motor joint order (same as original brainco controller)

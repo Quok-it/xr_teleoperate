@@ -314,6 +314,9 @@ if __name__ == '__main__':
             elif camera_config['head_camera']['enable_zmq']:
                 head_img = img_client.get_head_frame()
 
+            if camera_config['head_camera'].get('enable_depth') and args.record:
+                head_depth = img_client.get_head_depth_frame()
+
         logger_mp.info("---------------------🚀start Tracking🚀-------------------------")
 
         #begin waldogate
@@ -345,9 +348,17 @@ if __name__ == '__main__':
                 if not RECORD_RUNNING:
                     if recorder.create_episode():
                         RECORD_RUNNING = True
+                        if args.input_mode == "waldo":
+                            arm_ctrl.start()
+                            if args.ee == "brainco":
+                                hand_ctrl.start()
                     else:
                         logger_mp.error("Failed to create episode. Recording not started.")
                 else:
+                    if args.input_mode == "waldo":
+                        arm_ctrl.stop()
+                        if args.ee == "brainco":
+                            hand_ctrl.stop()
                     RECORD_RUNNING = False
                     recorder.save_episode()
                     if args.sim:
@@ -381,8 +392,8 @@ if __name__ == '__main__':
                 # recording arrays (dual_hand_state_array / dual_hand_action_array) internally.
                 pass
             #end waldogate
-            
-            # will be skipped if its waldo. 
+
+            # will be skipped if its waldo.
             # high level control
             if args.input_mode == "controller" and args.motion:
                 # quit teleoperate
@@ -489,7 +500,7 @@ if __name__ == '__main__':
                             right_ee_state = dual_hand_state_array[-6:]
                             left_hand_action = dual_hand_action_array[:6]
                             right_hand_action = dual_hand_action_array[-6:]
-                    
+
                     current_body_state = []
                     current_body_action = []
                     left_arm_state = current_lr_arm_q[:7]
@@ -511,6 +522,10 @@ if __name__ == '__main__':
                 if RECORD_RUNNING:
                     colors = {}
                     depths = {}
+                    if camera_config['head_camera'].get('enable_depth') and head_depth is not None:
+                        depths['depth_0'] = head_depth
+                        if camera_config['head_camera']['binocular']:
+                            depths['depth_1'] = head_depth
                     if camera_config['head_camera']['binocular']:
                         if head_img is not None and head_img.bgr is not None:
                             colors[f"color_{0}"] = head_img.bgr[:, :camera_config['head_camera']['image_shape'][1]//2]
