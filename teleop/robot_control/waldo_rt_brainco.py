@@ -119,13 +119,20 @@ class Waldo_Brainco_Controller:
     def _subscribe_hand_state(self):
         """Read motor state feedback from DDS (runs in background thread)."""
         while self.running:
-            left_msg = self.LeftHandState_subscriber.Read()
+            #TODO: uncomment once fixed
+            #left_msg = self.LeftHandState_subscriber.Read()
             right_msg = self.RightHandState_subscriber.Read()
             self.hand_sub_ready = True
-            if left_msg is not None and right_msg is not None:
+            #TODO: uncomment once fixed
+            '''if left_msg is not None and right_msg is not None:
                 with self._state_lock:
                     for idx, jid in enumerate(Brainco_Left_Hand_JointIndex):
                         self._left_hand_state[idx] = left_msg.states[jid].q
+                    for idx, jid in enumerate(Brainco_Right_Hand_JointIndex):
+                        self._right_hand_state[idx] = right_msg.states[jid].q
+            '''
+            if right_msg is not None:
+                with self._state_lock: 
                     for idx, jid in enumerate(Brainco_Right_Hand_JointIndex):
                         self._right_hand_state[idx] = right_msg.states[jid].q
             time.sleep(0.002)
@@ -139,12 +146,12 @@ class Waldo_Brainco_Controller:
         ctx = zmq.Context()
 
         right_sub = ctx.socket(zmq.SUB)
-        right_sub.connect(f"tcp://localhost:{self.right_hand_port}")
+        right_sub.connect(f"tcp://192.168.4.46:{self.right_hand_port}")
         right_sub.setsockopt(zmq.SUBSCRIBE, b"")
         right_sub.setsockopt(zmq.CONFLATE, 1)  # only keep latest message
 
         left_sub = ctx.socket(zmq.SUB)
-        left_sub.connect(f"tcp://localhost:{self.left_hand_port}")
+        left_sub.connect(f"tcp://192.168.4.46:{self.left_hand_port}")
         left_sub.setsockopt(zmq.SUBSCRIBE, b"")
         left_sub.setsockopt(zmq.CONFLATE, 1)
 

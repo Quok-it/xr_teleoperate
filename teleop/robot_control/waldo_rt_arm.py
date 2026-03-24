@@ -73,7 +73,7 @@ class Waldo_Arm_Controller:
         """
         ctx = zmq.Context()
         sub = ctx.socket(zmq.SUB)
-        sub.connect(f"tcp://localhost:{self.arm_port}")
+        sub.connect(f"tcp://192.168.4.46:{self.arm_port}")
         sub.setsockopt(zmq.SUBSCRIBE, b"")
         sub.setsockopt(zmq.CONFLATE, 1)  # only keep latest message
 
