@@ -39,9 +39,10 @@ class Waldo_Arm_Controller:
         self._zmq_lock = threading.Lock()
         self._q_target = np.zeros(ARM_NUM_JOINTS, dtype=np.float64)
 
-        # latest sol_q sent to arm_ctrl (for recording)
+        # latest sol_q and tauff sent to arm_ctrl (for recording)
         self._action_lock = threading.Lock()
         self._sol_q = np.zeros(ARM_NUM_JOINTS, dtype=np.float64)
+        self._sol_tauff = np.zeros(ARM_NUM_JOINTS, dtype=np.float64)
 
         # DDS arm controller (handles motor commands, state feedback, velocity clipping)
         self.arm_ctrl = G1_29_ArmController(motion_mode=motion_mode, simulation_mode=simulation_mode)
@@ -128,6 +129,7 @@ class Waldo_Arm_Controller:
                 # store for recording
                 with self._action_lock:
                     self._sol_q[:] = q_target
+                    self._sol_tauff[:] = tauff
 
                 elapsed = time.time() - start_time
                 sleep_time = max(0, (1 / self.fps) - elapsed)
@@ -145,6 +147,14 @@ class Waldo_Arm_Controller:
         """Return current arm joint velocities from DDS feedback."""
         return self.arm_ctrl.get_current_dual_arm_dq()
 
+    def get_current_dual_arm_ddq(self):
+        """Return current arm joint accelerations from DDS feedback."""
+        return self.arm_ctrl.get_current_dual_arm_ddq()
+
+    def get_current_dual_arm_tau_est(self):
+        """Return current arm estimated torques from DDS feedback."""
+        return self.arm_ctrl.get_current_dual_arm_tau_est()
+
     def get_current_motor_q(self):
         """Return current all-body motor positions from DDS feedback."""
         return self.arm_ctrl.get_current_motor_q()
@@ -154,6 +164,12 @@ class Waldo_Arm_Controller:
         For use in recording."""
         with self._action_lock:
             return self._sol_q.copy()
+
+    def get_arm_tauff(self):
+        """Return latest feedforward torques sent this frame.
+        For use in recording."""
+        with self._action_lock:
+            return self._sol_tauff.copy()
 
     def ctrl_dual_arm_go_home(self):
         """Return arms to home position."""

@@ -335,6 +335,12 @@ if __name__ == '__main__':
                 if args.record or xr_need_local_img:
                     head_img = img_client.get_head_frame()
                     tv_wrapper.render_to_xr(head_img)
+            if camera_config['head_camera'].get('enable_depth') and args.record:
+                try:
+                    head_depth = img_client.get_head_depth_frame()
+                except Exception as e:
+                    logger_mp.warning(f"[Depth] get_head_depth_frame failed: {e}")
+                    head_depth = None
             #if camera_config['left_wrist_camera']['enable_zmq']:
              #   if args.record:
               #      left_wrist_img = img_client.get_left_wrist_frame()
@@ -410,8 +416,10 @@ if __name__ == '__main__':
             #begin waldogate
             if args.input_mode != "waldo":
                 # get current robot state data.
-                current_lr_arm_q  = arm_ctrl.get_current_dual_arm_q()
-                current_lr_arm_dq = arm_ctrl.get_current_dual_arm_dq()
+                current_lr_arm_q       = arm_ctrl.get_current_dual_arm_q()
+                current_lr_arm_dq      = arm_ctrl.get_current_dual_arm_dq()
+                current_lr_arm_ddq     = arm_ctrl.get_current_dual_arm_ddq()
+                current_lr_arm_tau_est = arm_ctrl.get_current_dual_arm_tau_est()
 
                 # solve ik using motor data and wrist pose, then use ik results to control arms.
                 time_ik_start = time.time()
@@ -423,7 +431,10 @@ if __name__ == '__main__':
                 # Waldo arms: no main-loop work needed. Waldo_Arm_Controller runs its own
                 # ZMQ subscribe -> DDS publish loop in background threads.
                 # Read state for recording variables used below.
-                current_lr_arm_q = arm_ctrl.get_current_dual_arm_q()
+                current_lr_arm_q       = arm_ctrl.get_current_dual_arm_q()
+                current_lr_arm_dq      = arm_ctrl.get_current_dual_arm_dq()
+                current_lr_arm_ddq     = arm_ctrl.get_current_dual_arm_ddq()
+                current_lr_arm_tau_est = arm_ctrl.get_current_dual_arm_tau_est()
                 sol_q = arm_ctrl.get_arm_action()
             #end waldogate
             # record data
@@ -505,8 +516,17 @@ if __name__ == '__main__':
                     current_body_action = []
                     left_arm_state = current_lr_arm_q[:7]
                     right_arm_state = current_lr_arm_q[-7:]
+                    left_arm_dq      = current_lr_arm_dq[:7]
+                    right_arm_dq     = current_lr_arm_dq[-7:]
+                    left_arm_ddq     = current_lr_arm_ddq[:7]
+                    right_arm_ddq    = current_lr_arm_ddq[-7:]
+                    left_arm_tau_est  = current_lr_arm_tau_est[:7]
+                    right_arm_tau_est = current_lr_arm_tau_est[-7:]
                     left_arm_action = sol_q[:7]
                     right_arm_action = sol_q[-7:]
+                    sol_tauff = arm_ctrl.get_arm_tauff()
+                    left_arm_action_tauff  = sol_tauff[:7]
+                    right_arm_action_tauff = sol_tauff[-7:]
                 #end waldogate
                 else:
                     left_ee_state = []
@@ -517,8 +537,16 @@ if __name__ == '__main__':
                     current_body_action = []
                     left_arm_state  = current_lr_arm_q[:7]
                     right_arm_state = current_lr_arm_q[-7:]
+                    left_arm_dq      = current_lr_arm_dq[:7]
+                    right_arm_dq     = current_lr_arm_dq[-7:]
+                    left_arm_ddq     = current_lr_arm_ddq[:7]
+                    right_arm_ddq    = current_lr_arm_ddq[-7:]
+                    left_arm_tau_est  = current_lr_arm_tau_est[:7]
+                    right_arm_tau_est = current_lr_arm_tau_est[-7:]
                     left_arm_action = sol_q[:7]
                     right_arm_action = sol_q[-7:]
+                    left_arm_action_tauff  = sol_tauff[:7]
+                    right_arm_action_tauff = sol_tauff[-7:]
                 if RECORD_RUNNING:
                     colors = {}
                     depths = {}
@@ -558,54 +586,56 @@ if __name__ == '__main__':
                            # else:
                             #    logger_mp.warning("Right wrist image is None!")
                     states = {
-                        "left_arm": {                                                                    
-                            "qpos":   left_arm_state.tolist(),    # numpy.array -> list
-                            "qvel":   [],                          
-                            "torque": [],                        
-                        }, 
-                        "right_arm": {                                                                    
-                            "qpos":   right_arm_state.tolist(),       
-                            "qvel":   [],                          
-                            "torque": [],                         
-                        },                        
-                        "left_ee": {                                                                    
-                            "qpos":   left_ee_state,           
-                            "qvel":   [],                           
-                            "torque": [],                          
-                        }, 
-                        "right_ee": {                                                                    
-                            "qpos":   right_ee_state,       
-                            "qvel":   [],                           
-                            "torque": [],  
-                        }, 
+                        "left_arm": {
+                            "qpos":    left_arm_state.tolist(),      # numpy.array -> list
+                            "qvel":    left_arm_dq.tolist(),
+                            "torque":  left_arm_tau_est.tolist(),
+                            "ddq":     left_arm_ddq.tolist(),
+                        },
+                        "right_arm": {
+                            "qpos":    right_arm_state.tolist(),
+                            "qvel":    right_arm_dq.tolist(),
+                            "torque":  right_arm_tau_est.tolist(),
+                            "ddq":     right_arm_ddq.tolist(),
+                        },
+                        "left_ee": {
+                            "qpos":   left_ee_state,
+                            "qvel":   [],
+                            "torque": [],
+                        },
+                        "right_ee": {
+                            "qpos":   right_ee_state,
+                            "qvel":   [],
+                            "torque": [],
+                        },
                         "body": {
                             "qpos": current_body_state,
-                        }, 
+                        },
                     }
                     actions = {
-                        "left_arm": {                                   
-                            "qpos":   left_arm_action.tolist(),       
-                            "qvel":   [],       
-                            "torque": [],      
-                        }, 
-                        "right_arm": {                                   
-                            "qpos":   right_arm_action.tolist(),       
-                            "qvel":   [],       
-                            "torque": [],       
-                        },                         
-                        "left_ee": {                                   
-                            "qpos":   left_hand_action,       
-                            "qvel":   [],       
-                            "torque": [],       
-                        }, 
-                        "right_ee": {                                   
-                            "qpos":   right_hand_action,       
-                            "qvel":   [],       
-                            "torque": [], 
-                        }, 
+                        "left_arm": {
+                            "qpos":   left_arm_action.tolist(),
+                            "qvel":   [],
+                            "torque": left_arm_action_tauff.tolist(),
+                        },
+                        "right_arm": {
+                            "qpos":   right_arm_action.tolist(),
+                            "qvel":   [],
+                            "torque": right_arm_action_tauff.tolist(),
+                        },
+                        "left_ee": {
+                            "qpos":   left_hand_action,
+                            "qvel":   [],
+                            "torque": [],
+                        },
+                        "right_ee": {
+                            "qpos":   right_hand_action,
+                            "qvel":   [],
+                            "torque": [],
+                        },
                         "body": {
                             "qpos": current_body_action,
-                        }, 
+                        },
                     }
                     if args.sim:
                         sim_state = sim_state_subscriber.read_data()            
