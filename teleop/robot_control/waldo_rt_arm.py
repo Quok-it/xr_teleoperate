@@ -1,4 +1,4 @@
-from teleop.robot_control.robot_arm import G1_29_ArmController
+from teleop.robot_control.robot_arm import G1_29_ArmController, G1_29_JointArmIndex, G1_29_JointIndex
 
 import numpy as np
 import pinocchio as pin
@@ -31,7 +31,8 @@ class Waldo_Arm_Controller:
         logger_mp.info("Initialize Waldo_Arm_Controller...")
         self.fps = fps
         self.simulation_mode = simulation_mode
-        self.running = False
+        self.running = True
+        self._idle = True
         self.arm_port = arm_port
         self._zmq_connected = False
 
@@ -51,20 +52,9 @@ class Waldo_Arm_Controller:
         from teleop.robot_control.arm_pink_real import load_model
         self._rnea_model, self._rnea_data, _, _, _ = load_model()
 
-        # thread references (started by start())
-        self._zmq_thread = None
-        self._ctrl_thread = None
-
-        logger_mp.info("Initialize Waldo_Arm_Controller OK!")
-
-    def start(self):
-        """Start ZMQ subscriber and control loop threads."""
-        if self.running:
-            logger_mp.warning("[Waldo_Arm] Already running, ignoring start()")
-            return
-
-        self.running = True
-        self._zmq_connected = False
+        # start control loop thread (publishes zeros while idle / waiting for ZMQ)
+        self._ctrl_thread = threading.Thread(target=self._control_loop, daemon=True)
+        self._ctrl_thread.start()
 
         # start ZMQ subscriber thread
         self._zmq_thread = threading.Thread(target=self._subscribe_zmq, daemon=True)
@@ -75,9 +65,20 @@ class Waldo_Arm_Controller:
             logger_mp.warning("[Waldo_Arm] Waiting for ZMQ arm data on port %d...", self.arm_port)
         logger_mp.info("[Waldo_Arm] ZMQ arm data connected.")
 
-        # start control loop thread
-        self._ctrl_thread = threading.Thread(target=self._control_loop, daemon=True)
-        self._ctrl_thread.start()
+        logger_mp.info("Initialize Waldo_Arm_Controller OK!")
+
+    def start(self):
+        """Activate: forward ZMQ data to robot."""
+        # restore gains for active control
+        arm_indices = set(member.value for member in G1_29_JointArmIndex)
+        for id in G1_29_JointIndex:
+            if id.value in arm_indices:
+                if self.arm_ctrl._Is_wrist_motor(id):
+                    self.arm_ctrl.msg.motor_cmd[id].kp = self.arm_ctrl.kp_wrist
+                else:
+                    self.arm_ctrl.msg.motor_cmd[id].kp = self.arm_ctrl.kp_low
+        self._idle = False
+        self.speed_gradual_max(t=1.0)
 
     def _subscribe_zmq(self):
         """Subscribe to stream_arm_zmq.py ZMQ PUB socket for joint angles.
@@ -110,14 +111,17 @@ class Waldo_Arm_Controller:
             while self.running:
                 start_time = time.time()
 
-                # read latest joint angle targets from ZMQ
-                with self._zmq_lock:
-                    q_target = self._q_target.copy()
-
-                # don't publish until we've received real data
                 if not self._zmq_connected:
                     time.sleep(1.0 / self.fps)
                     continue
+
+                if self._idle:
+                    time.sleep(1.0 / self.fps)
+                    continue
+                else:
+                    # active: forward ZMQ data
+                    with self._zmq_lock:
+                        q_target = self._q_target.copy()
 
                 # compute feedforward torques via RNEA
                 v = np.zeros(self._rnea_model.nv)
@@ -180,11 +184,7 @@ class Waldo_Arm_Controller:
         self.arm_ctrl.speed_gradual_max(t)
 
     def stop(self):
-        """Stop all threads and clean up."""
-        self.running = False
-        if self._zmq_thread is not None:
-            self._zmq_thread.join(timeout=2.0)
-            self._zmq_thread = None
-        if self._ctrl_thread is not None:
-            self._ctrl_thread.join(timeout=2.0)
-            self._ctrl_thread = None
+        """Idle: block ZMQ and return arms home."""
+        self._idle = True
+        self.arm_ctrl.arm_velocity_limit = 0.5
+        self.arm_ctrl.ctrl_dual_arm_go_home()

@@ -362,9 +362,9 @@ if __name__ == '__main__':
                         logger_mp.error("Failed to create episode. Recording not started.")
                 else:
                     if args.input_mode == "waldo":
-                        arm_ctrl.stop()
                         if args.ee == "brainco":
                             hand_ctrl.stop()
+                        arm_ctrl.stop()
                     RECORD_RUNNING = False
                     recorder.save_episode()
                     if args.sim:

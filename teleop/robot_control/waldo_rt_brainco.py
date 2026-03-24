@@ -51,7 +51,8 @@ class Waldo_Brainco_Controller:
         self.dual_hand_data_lock = dual_hand_data_lock
         self.dual_hand_state_array = dual_hand_state_array
         self.dual_hand_action_array = dual_hand_action_array
-        self.running = False
+        self.running = True
+        self._idle = True
 
         # ZMQ subscriber setup for inference_server joint angles
         self.right_hand_port = right_hand_port
@@ -92,23 +93,6 @@ class Waldo_Brainco_Controller:
             self.right_hand_msg.cmds[i].q = 0.0
             self.right_hand_msg.cmds[i].dq = 1.0
 
-        # thread references (started by start())
-        self._dds_state_thread = None
-        self._zmq_thread = None
-        self._ctrl_thread = None
-
-        logger_mp.info("Initialize Waldo_Brainco_Controller OK!")
-
-    def start(self):
-        """Start DDS state subscriber, ZMQ subscriber, and control loop threads."""
-        if self.running:
-            logger_mp.warning("[Waldo_Brainco] Already running, ignoring start()")
-            return
-
-        self.running = True
-        self.hand_sub_ready = False
-        self._zmq_connected = False
-
         # start DDS state subscriber thread
         self._dds_state_thread = threading.Thread(target=self._subscribe_hand_state, daemon=True)
         self._dds_state_thread.start()
@@ -130,6 +114,15 @@ class Waldo_Brainco_Controller:
         # start control loop thread
         self._ctrl_thread = threading.Thread(target=self._control_loop, daemon=True)
         self._ctrl_thread.start()
+
+        logger_mp.info("Initialize Waldo_Brainco_Controller OK!")
+
+    def start(self):
+        """Activate: forward ZMQ data to hands."""
+        for i in range(brainco_Num_Motors):
+            self.left_hand_msg.cmds[i].dq = 1.0
+            self.right_hand_msg.cmds[i].dq = 1.0
+        self._idle = False
 
     def _subscribe_hand_state(self):
         """Read motor state feedback from DDS (runs in background thread)."""
@@ -232,12 +225,16 @@ class Waldo_Brainco_Controller:
                         self.dual_hand_state_array[:] = state_data
                         self.dual_hand_action_array[:] = action_data
 
-                # don't publish until we've received real data from inference_server
                 if not self._zmq_connected:
                     continue
 
-                # publish motor commands via DDS
-                self._ctrl_dual_hand(left_q_target, right_q_target)
+                if self._idle:
+                    # idle: publish zeros (fully open)
+                    self._ctrl_dual_hand(np.zeros(brainco_Num_Motors),
+                                         np.zeros(brainco_Num_Motors))
+                else:
+                    # active: publish ZMQ data
+                    self._ctrl_dual_hand(left_q_target, right_q_target)
 
                 elapsed = time.time() - start_time
                 sleep_time = max(0, (1 / self.fps) - elapsed)
@@ -268,18 +265,28 @@ class Waldo_Brainco_Controller:
         with self._zmq_lock:
             return self._left_q_target.copy(), self._right_q_target.copy()
 
+    def ctrl_dual_hand_go_home(self):
+        """Slowly open hands to fully open (zeros) position."""
+        logger_mp.info("[Waldo_Brainco] ctrl_dual_hand_go_home start...")
+        # lower speed for gentle return
+        for i in range(brainco_Num_Motors):
+            self.left_hand_msg.cmds[i].dq = 0.2
+            self.right_hand_msg.cmds[i].dq = 0.2
+        home = np.zeros(brainco_Num_Motors)
+        max_attempts = 100
+        for attempt in range(max_attempts):
+            self._ctrl_dual_hand(home, home)
+            with self._state_lock:
+                right_state = self._right_hand_state.copy()
+            if np.all(np.abs(right_state) < 0.05):
+                logger_mp.info("[Waldo_Brainco] hands have reached home position.")
+                break
+            time.sleep(0.05)
+
     def stop(self):
-        """Stop all threads and clean up."""
-        self.running = False
-        if self._dds_state_thread is not None:
-            self._dds_state_thread.join(timeout=2.0)
-            self._dds_state_thread = None
-        if self._zmq_thread is not None:
-            self._zmq_thread.join(timeout=2.0)
-            self._zmq_thread = None
-        if self._ctrl_thread is not None:
-            self._ctrl_thread.join(timeout=2.0)
-            self._ctrl_thread = None
+        """Idle: block ZMQ and return hands home."""
+        self._idle = True
+        self.ctrl_dual_hand_go_home()
 
 
 # Motor joint order (same as original brainco controller)
