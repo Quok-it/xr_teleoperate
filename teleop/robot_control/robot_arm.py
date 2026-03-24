@@ -28,6 +28,8 @@ class MotorState:
     def __init__(self):
         self.q = None
         self.dq = None
+        self.ddq = None
+        self.tau_est = None
 
 class G1_29_LowState:
     def __init__(self):
@@ -61,7 +63,12 @@ class DataBuffer:
 class G1_29_ArmController:
     def __init__(self, motion_mode = False, simulation_mode = False):
         logger_mp.info("Initialize G1_29_ArmController...")
-        self.q_target = np.zeros(14)
+        # [L_sp, L_sr, L_sy, L_e, L_wr, L_wp, L_wy,
+        #  R_sp, R_sr, R_sy, R_e, R_wr, R_wp, R_wy]
+        self.q_target = np.array([
+            0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 0.0,   # left arm
+            0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 0.0,   # right arm
+        ])
         self.tauff_target = np.zeros(14)
         self.motion_mode = motion_mode
         self.simulation_mode = simulation_mode
@@ -144,8 +151,10 @@ class G1_29_ArmController:
             if msg is not None:
                 lowstate = G1_29_LowState()
                 for id in range(G1_29_Num_Motors):
-                    lowstate.motor_state[id].q  = msg.motor_state[id].q
-                    lowstate.motor_state[id].dq = msg.motor_state[id].dq
+                    lowstate.motor_state[id].q       = msg.motor_state[id].q
+                    lowstate.motor_state[id].dq      = msg.motor_state[id].dq
+                    lowstate.motor_state[id].ddq     = msg.motor_state[id].ddq
+                    lowstate.motor_state[id].tau_est = msg.motor_state[id].tau_est
                 self.lowstate_buffer.SetData(lowstate)
             time.sleep(0.002)
 
@@ -212,19 +221,41 @@ class G1_29_ArmController:
     def get_current_dual_arm_dq(self):
         '''Return current state dq of the left and right arm motors.'''
         return np.array([self.lowstate_buffer.GetData().motor_state[id].dq for id in G1_29_JointArmIndex])
-    
+
+    def get_current_dual_arm_ddq(self):
+        '''Return current state ddq of the left and right arm motors.'''
+        return np.array([self.lowstate_buffer.GetData().motor_state[id].ddq for id in G1_29_JointArmIndex])
+
+    def get_current_dual_arm_tau_est(self):
+        '''Return current estimated torque tau_est of the left and right arm motors.'''
+        return np.array([self.lowstate_buffer.GetData().motor_state[id].tau_est for id in G1_29_JointArmIndex])
+
     def ctrl_dual_arm_go_home(self):
-        '''Move both the left and right arms of the robot to their home position by setting the target joint angles (q) and torques (tau) to zero.'''
+        '''Move both the left and right arms of the robot to their home position.'''
         logger_mp.info("[G1_29_ArmController] ctrl_dual_arm_go_home start...")
         max_attempts = 100
         current_attempts = 0
+        # [L_sp, L_sr, L_sy, L_e, L_wr, L_wp, L_wy,
+        #  R_sp, R_sr, R_sy, R_e, R_wr, R_wp, R_wy]
+        home_q = np.array([
+            0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 0.0,   # left arm
+            0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 0.0,   # right arm
+        ])
+        # lower gains for gentle return (restored by speed_gradual_max on next start)
+        arm_indices = set(member.value for member in G1_29_JointArmIndex)
+        for id in G1_29_JointIndex:
+            if id.value in arm_indices:
+                if self._Is_wrist_motor(id):
+                    self.msg.motor_cmd[id].kp = 10.0
+                else:
+                    self.msg.motor_cmd[id].kp = 20.0
         with self.ctrl_lock:
-            self.q_target = np.zeros(14)
+            self.q_target = home_q
             # self.tauff_target = np.zeros(14)
-        tolerance = 0.05  # Tolerance threshold for joint angles to determine "close to zero", can be adjusted based on your motor's precision requirements
+        tolerance = 0.05
         while current_attempts < max_attempts:
             current_q = self.get_current_dual_arm_q()
-            if np.all(np.abs(current_q) < tolerance):
+            if np.all(np.abs(current_q - home_q) < tolerance):
                 if self.motion_mode:
                     for weight in np.linspace(1, 0, num=101):
                         self.msg.motor_cmd[G1_29_JointIndex.kNotUsedJoint0].q = weight;
@@ -427,8 +458,10 @@ class G1_23_ArmController:
             if msg is not None:
                 lowstate = G1_23_LowState()
                 for id in range(G1_23_Num_Motors):
-                    lowstate.motor_state[id].q  = msg.motor_state[id].q
-                    lowstate.motor_state[id].dq = msg.motor_state[id].dq
+                    lowstate.motor_state[id].q       = msg.motor_state[id].q
+                    lowstate.motor_state[id].dq      = msg.motor_state[id].dq
+                    lowstate.motor_state[id].ddq     = msg.motor_state[id].ddq
+                    lowstate.motor_state[id].tau_est = msg.motor_state[id].tau_est
                 self.lowstate_buffer.SetData(lowstate)
             time.sleep(0.002)
 
@@ -495,7 +528,15 @@ class G1_23_ArmController:
     def get_current_dual_arm_dq(self):
         '''Return current state dq of the left and right arm motors.'''
         return np.array([self.lowstate_buffer.GetData().motor_state[id].dq for id in G1_23_JointArmIndex])
-    
+
+    def get_current_dual_arm_ddq(self):
+        '''Return current state ddq of the left and right arm motors.'''
+        return np.array([self.lowstate_buffer.GetData().motor_state[id].ddq for id in G1_23_JointArmIndex])
+
+    def get_current_dual_arm_tau_est(self):
+        '''Return current estimated torque tau_est of the left and right arm motors.'''
+        return np.array([self.lowstate_buffer.GetData().motor_state[id].tau_est for id in G1_23_JointArmIndex])
+
     def ctrl_dual_arm_go_home(self):
         '''Move both the left and right arms of the robot to their home position by setting the target joint angles (q) and torques (tau) to zero.'''
         logger_mp.info("[G1_23_ArmController] ctrl_dual_arm_go_home start...")
@@ -702,8 +743,10 @@ class H1_2_ArmController:
             if msg is not None:
                 lowstate = H1_2_LowState()
                 for id in range(H1_2_Num_Motors):
-                    lowstate.motor_state[id].q  = msg.motor_state[id].q
-                    lowstate.motor_state[id].dq = msg.motor_state[id].dq
+                    lowstate.motor_state[id].q       = msg.motor_state[id].q
+                    lowstate.motor_state[id].dq      = msg.motor_state[id].dq
+                    lowstate.motor_state[id].ddq     = msg.motor_state[id].ddq
+                    lowstate.motor_state[id].tau_est = msg.motor_state[id].tau_est
                 self.lowstate_buffer.SetData(lowstate)
             time.sleep(0.002)
 
@@ -770,7 +813,15 @@ class H1_2_ArmController:
     def get_current_dual_arm_dq(self):
         '''Return current state dq of the left and right arm motors.'''
         return np.array([self.lowstate_buffer.GetData().motor_state[id].dq for id in H1_2_JointArmIndex])
-    
+
+    def get_current_dual_arm_ddq(self):
+        '''Return current state ddq of the left and right arm motors.'''
+        return np.array([self.lowstate_buffer.GetData().motor_state[id].ddq for id in H1_2_JointArmIndex])
+
+    def get_current_dual_arm_tau_est(self):
+        '''Return current estimated torque tau_est of the left and right arm motors.'''
+        return np.array([self.lowstate_buffer.GetData().motor_state[id].tau_est for id in H1_2_JointArmIndex])
+
     def ctrl_dual_arm_go_home(self):
         '''Move both the left and right arms of the robot to their home position by setting the target joint angles (q) and torques (tau) to zero.'''
         logger_mp.info("[H1_2_ArmController] ctrl_dual_arm_go_home start...")
@@ -971,8 +1022,10 @@ class H1_ArmController:
             if msg is not None:
                 lowstate = H1_LowState()
                 for id in range(H1_Num_Motors):
-                    lowstate.motor_state[id].q  = msg.motor_state[id].q
-                    lowstate.motor_state[id].dq = msg.motor_state[id].dq
+                    lowstate.motor_state[id].q       = msg.motor_state[id].q
+                    lowstate.motor_state[id].dq      = msg.motor_state[id].dq
+                    lowstate.motor_state[id].ddq     = msg.motor_state[id].ddq
+                    lowstate.motor_state[id].tau_est = msg.motor_state[id].tau_est
                 self.lowstate_buffer.SetData(lowstate)
             time.sleep(0.002)
 
@@ -1032,7 +1085,15 @@ class H1_ArmController:
     def get_current_dual_arm_dq(self):
         '''Return current state dq of the left and right arm motors.'''
         return np.array([self.lowstate_buffer.GetData().motor_state[id].dq for id in H1_JointArmIndex])
-    
+
+    def get_current_dual_arm_ddq(self):
+        '''Return current state ddq of the left and right arm motors.'''
+        return np.array([self.lowstate_buffer.GetData().motor_state[id].ddq for id in H1_JointArmIndex])
+
+    def get_current_dual_arm_tau_est(self):
+        '''Return current estimated torque tau_est of the left and right arm motors.'''
+        return np.array([self.lowstate_buffer.GetData().motor_state[id].tau_est for id in H1_JointArmIndex])
+
     def ctrl_dual_arm_go_home(self):
         '''Move both the left and right arms of the robot to their home position by setting the target joint angles (q) and torques (tau) to zero.'''
         logger_mp.info("[H1_ArmController] ctrl_dual_arm_go_home start...")
