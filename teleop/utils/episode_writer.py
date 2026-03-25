@@ -11,9 +11,10 @@ import logging_mp
 logger_mp = logging_mp.getLogger(__name__)
 
 class EpisodeWriter():
-    def __init__(self, task_dir, task_goal=None, task_desc = None, task_steps = None, frequency=30, image_size=[640, 480], rerun_log = True):
+    def __init__(self, task_dir, task_goal=None, task_desc = None, task_steps = None, frequency=30, image_size=[640, 480], joint_names=None, rerun_log = True):
         """
         image_size: [width, height]
+        joint_names: dict with keys "left_arm", "left_ee", "right_arm", "right_ee", "body"
         """
         logger_mp.info("==> EpisodeWriter initializing...\n")
         self.task_dir = task_dir
@@ -31,6 +32,11 @@ class EpisodeWriter():
 
         self.frequency = frequency
         self.image_size = image_size
+        self.joint_names = joint_names or {
+            "left_arm": [], "left_ee": [],
+            "right_arm": [], "right_ee": [],
+            "body": [],
+        }
 
         self.rerun_log = rerun_log
         if self.rerun_log:
@@ -71,13 +77,7 @@ class EpisodeWriter():
                 "image": {"width":self.image_size[0], "height":self.image_size[1], "fps":self.frequency},
                 "depth": {"width":self.image_size[0], "height":self.image_size[1], "fps":self.frequency},
                 "audio": {"sample_rate": 16000, "channels": 1, "format":"PCM", "bits":16},    # PCM_S16
-                "joint_names":{
-                    "left_arm":   [],
-                    "left_ee":  [],
-                    "right_arm":  [],
-                    "right_ee": [],
-                    "body":       [],
-                },
+                "joint_names": self.joint_names,
 
                 "tactile_names": {
                     "left_ee": [],
@@ -132,6 +132,7 @@ class EpisodeWriter():
         # Create the item data dictionary
         item_data = {
             'idx': self.item_id,
+            'timestamp_ns': time.time_ns(),
             'colors': colors,
             'depths': depths,
             'states': states,

@@ -268,10 +268,13 @@ class Waldo_Arm_Controller:
         tau_ext = self.get_current_dual_arm_external_tau()
         pin.forwardKinematics(self._rnea_model, self._rnea_data, q)
         pin.updateFramePlacements(self._rnea_model, self._rnea_data)
-        J_l = pin.computeFrameJacobian(self._rnea_model, self._rnea_data, q,
+        J_l_full = pin.computeFrameJacobian(self._rnea_model, self._rnea_data, q,
                                         self._left_frame_id, pin.LOCAL_WORLD_ALIGNED)
-        J_r = pin.computeFrameJacobian(self._rnea_model, self._rnea_data, q,
+        J_r_full = pin.computeFrameJacobian(self._rnea_model, self._rnea_data, q,
                                         self._right_frame_id, pin.LOCAL_WORLD_ALIGNED)
+        # Slice to each arm's own joints (left=0:7, right=7:14)
+        J_l = J_l_full[:, :7]
+        J_r = J_r_full[:, 7:]
         # J^{-T} @ tau = (J @ J^T)^{-1} @ J @ tau  (pseudoinverse transpose)
         wrench_l = np.linalg.lstsq(J_l.T, tau_ext[:7], rcond=None)[0]
         wrench_r = np.linalg.lstsq(J_r.T, tau_ext[7:], rcond=None)[0]
