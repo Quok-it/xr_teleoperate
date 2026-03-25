@@ -30,10 +30,12 @@ class MotorState:
         self.dq = None
         self.ddq = None
         self.tau_est = None
+        self.temperature = None
 
 class G1_29_LowState:
     def __init__(self):
         self.motor_state = [MotorState() for _ in range(G1_29_Num_Motors)]
+        self.tick = 0
 
 class G1_23_LowState:
     def __init__(self):
@@ -150,11 +152,13 @@ class G1_29_ArmController:
             msg = self.lowstate_subscriber.Read()
             if msg is not None:
                 lowstate = G1_29_LowState()
+                lowstate.tick = msg.tick
                 for id in range(G1_29_Num_Motors):
-                    lowstate.motor_state[id].q       = msg.motor_state[id].q
-                    lowstate.motor_state[id].dq      = msg.motor_state[id].dq
-                    lowstate.motor_state[id].ddq     = msg.motor_state[id].ddq
-                    lowstate.motor_state[id].tau_est = msg.motor_state[id].tau_est
+                    lowstate.motor_state[id].q           = msg.motor_state[id].q
+                    lowstate.motor_state[id].dq          = msg.motor_state[id].dq
+                    lowstate.motor_state[id].ddq         = msg.motor_state[id].ddq
+                    lowstate.motor_state[id].tau_est     = msg.motor_state[id].tau_est
+                    lowstate.motor_state[id].temperature = msg.motor_state[id].temperature
                 self.lowstate_buffer.SetData(lowstate)
             time.sleep(0.002)
 
@@ -229,6 +233,14 @@ class G1_29_ArmController:
     def get_current_dual_arm_tau_est(self):
         '''Return current estimated torque tau_est of the left and right arm motors.'''
         return np.array([self.lowstate_buffer.GetData().motor_state[id].tau_est for id in G1_29_JointArmIndex])
+
+    def get_current_dual_arm_temperature(self):
+        '''Return current temperature of the left and right arm motors. Each motor has 2 sensors (int16[2]).'''
+        return [list(self.lowstate_buffer.GetData().motor_state[id].temperature) for id in G1_29_JointArmIndex]
+
+    def get_current_tick(self):
+        '''Return current motor cycle tick from LowState.'''
+        return self.lowstate_buffer.GetData().tick
 
     def ctrl_dual_arm_go_home(self):
         '''Move both the left and right arms of the robot to their home position.'''

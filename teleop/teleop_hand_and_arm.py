@@ -292,12 +292,60 @@ if __name__ == '__main__':
             cam_h, cam_w = camera_config['head_camera']['image_shape']
             if camera_config['head_camera']['binocular']:
                 cam_w = cam_w // 2
+
+            # arm joint names per robot type (left then right, matching qpos order)
+            ARM_JOINT_NAMES = {
+                "G1_29": {
+                    "left_arm":  ["left_shoulder_pitch", "left_shoulder_roll", "left_shoulder_yaw", "left_elbow", "left_wrist_roll", "left_wrist_pitch", "left_wrist_yaw"],
+                    "right_arm": ["right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow", "right_wrist_roll", "right_wrist_pitch", "right_wrist_yaw"],
+                },
+                "G1_23": {
+                    "left_arm":  ["left_shoulder_pitch", "left_shoulder_roll", "left_shoulder_yaw", "left_elbow", "left_wrist_roll"],
+                    "right_arm": ["right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow", "right_wrist_roll"],
+                },
+                "H1_2": {
+                    "left_arm":  ["left_shoulder_pitch", "left_shoulder_roll", "left_shoulder_yaw", "left_elbow_pitch", "left_elbow_roll", "left_wrist_pitch", "left_wrist_yaw"],
+                    "right_arm": ["right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow_pitch", "right_elbow_roll", "right_wrist_pitch", "right_wrist_yaw"],
+                },
+                "H1": {
+                    "left_arm":  ["left_shoulder_pitch", "left_shoulder_roll", "left_shoulder_yaw", "left_elbow"],
+                    "right_arm": ["right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow"],
+                },
+            }
+            # end-effector joint names per hand type
+            EE_JOINT_NAMES = {
+                "dex3": {
+                    "left_ee":  ["left_thumb_0", "left_thumb_1", "left_thumb_2", "left_middle_0", "left_middle_1", "left_index_0", "left_index_1"],
+                    "right_ee": ["right_thumb_0", "right_thumb_1", "right_thumb_2", "right_index_0", "right_index_1", "right_middle_0", "right_middle_1"],
+                },
+                "dex1": {
+                    "left_ee":  ["left_gripper"],
+                    "right_ee": ["right_gripper"],
+                },
+                "inspire_dfx": {
+                    "left_ee":  ["left_pinky", "left_ring", "left_middle", "left_index", "left_thumb_bend", "left_thumb_rotation"],
+                    "right_ee": ["right_pinky", "right_ring", "right_middle", "right_index", "right_thumb_bend", "right_thumb_rotation"],
+                },
+                "inspire_ftp": {
+                    "left_ee":  ["left_pinky", "left_ring", "left_middle", "left_index", "left_thumb_bend", "left_thumb_rotation"],
+                    "right_ee": ["right_pinky", "right_ring", "right_middle", "right_index", "right_thumb_bend", "right_thumb_rotation"],
+                },
+                "brainco": {
+                    "left_ee":  ["left_thumb", "left_thumb_aux", "left_index", "left_middle", "left_ring", "left_pinky"],
+                    "right_ee": ["right_thumb", "right_thumb_aux", "right_index", "right_middle", "right_ring", "right_pinky"],
+                },
+            }
+            arm_names = ARM_JOINT_NAMES.get(args.arm, {"left_arm": [], "right_arm": []})
+            ee_names = EE_JOINT_NAMES.get(args.ee, {"left_ee": [], "right_ee": []})
+            joint_names = {**arm_names, **ee_names, "body": []}
+
             recorder = EpisodeWriter(task_dir = os.path.join(args.task_dir, args.task_name),
                                      task_goal = args.task_goal,
                                      task_desc = args.task_desc,
                                      task_steps = args.task_steps,
                                      frequency = args.frequency,
                                      image_size = [cam_w, cam_h],
+                                     joint_names = joint_names,
                                      rerun_log = not args.headless)
 
         logger_mp.info("----------------------------------------------------------------")
@@ -439,7 +487,29 @@ if __name__ == '__main__':
                 current_lr_arm_dq      = arm_ctrl.get_current_dual_arm_dq()
                 current_lr_arm_ddq     = arm_ctrl.get_current_dual_arm_ddq()
                 current_lr_arm_tau_est = arm_ctrl.get_current_dual_arm_tau_est()
+                current_lr_arm_ext_tau  = arm_ctrl.get_current_dual_arm_external_tau()
+                current_lr_arm_comp_tau = arm_ctrl.get_current_dual_arm_compensation_tau()
                 sol_q = arm_ctrl.get_arm_action()
+                sol_dq = arm_ctrl.get_arm_action_velocity()
+                sol_ddq = arm_ctrl.get_arm_action_acceleration()
+                # cartesian positions via FK
+                state_l_pos, state_l_aa, state_r_pos, state_r_aa = arm_ctrl.get_current_dual_arm_cartesian_pos()
+                action_l_pos, action_l_aa, action_r_pos, action_r_aa = arm_ctrl.get_arm_action_cartesian_pos()
+                # cartesian velocities via Jacobian
+                state_l_twist, state_r_twist = arm_ctrl.get_current_dual_arm_cartesian_vel()
+                action_l_twist, action_r_twist = arm_ctrl.get_arm_action_cartesian_vel()
+                # cartesian accelerations via FK
+                state_l_accel, state_r_accel = arm_ctrl.get_current_dual_arm_cartesian_accel()
+                action_l_accel, action_r_accel = arm_ctrl.get_arm_action_cartesian_accel()
+                # cartesian external wrench (follower only)
+                state_l_ext_wrench, state_r_ext_wrench = arm_ctrl.get_current_dual_arm_cartesian_external_wrench()
+                # motor temperatures (follower only)
+                arm_temperatures = arm_ctrl.get_current_dual_arm_temperature()
+                # output IDs and timestamps
+                follower_tick = arm_ctrl.get_current_tick()
+                follower_timestamp = time.time()
+                leader_frame_count = arm_ctrl.get_action_frame_count()
+                leader_timestamp = arm_ctrl.get_arm_action_timestamp()
             #end waldogate
             # record data
             if args.record:
@@ -524,10 +594,18 @@ if __name__ == '__main__':
                     right_arm_dq     = current_lr_arm_dq[-7:]
                     left_arm_ddq     = current_lr_arm_ddq[:7]
                     right_arm_ddq    = current_lr_arm_ddq[-7:]
-                    left_arm_tau_est  = current_lr_arm_tau_est[:7]
-                    right_arm_tau_est = current_lr_arm_tau_est[-7:]
+                    left_arm_tau_est      = current_lr_arm_tau_est[:7]
+                    right_arm_tau_est     = current_lr_arm_tau_est[-7:]
+                    left_arm_ext_tau       = current_lr_arm_ext_tau[:7]
+                    right_arm_ext_tau      = current_lr_arm_ext_tau[-7:]
+                    left_arm_comp_tau      = current_lr_arm_comp_tau[:7]
+                    right_arm_comp_tau     = current_lr_arm_comp_tau[-7:]
                     left_arm_action = sol_q[:7]
                     right_arm_action = sol_q[-7:]
+                    left_arm_action_dq   = sol_dq[:7]
+                    right_arm_action_dq  = sol_dq[-7:]
+                    left_arm_action_ddq  = sol_ddq[:7]
+                    right_arm_action_ddq = sol_ddq[-7:]
                     sol_tauff = arm_ctrl.get_arm_tauff()
                     left_arm_action_tauff  = sol_tauff[:7]
                     right_arm_action_tauff = sol_tauff[-7:]
@@ -547,8 +625,16 @@ if __name__ == '__main__':
                     right_arm_ddq    = current_lr_arm_ddq[-7:]
                     left_arm_tau_est  = current_lr_arm_tau_est[:7]
                     right_arm_tau_est = current_lr_arm_tau_est[-7:]
+                    left_arm_ext_tau       = []
+                    right_arm_ext_tau      = []
+                    left_arm_comp_tau      = []
+                    right_arm_comp_tau     = []
                     left_arm_action = sol_q[:7]
                     right_arm_action = sol_q[-7:]
+                    left_arm_action_dq     = []
+                    right_arm_action_dq    = []
+                    left_arm_action_ddq    = []
+                    right_arm_action_ddq   = []
                     left_arm_action_tauff  = sol_tauff[:7]
                     right_arm_action_tauff = sol_tauff[-7:]
                 if RECORD_RUNNING:
@@ -591,16 +677,32 @@ if __name__ == '__main__':
                             #    logger_mp.warning("Right wrist image is None!")
                     states = {
                         "left_arm": {
-                            "qpos":    left_arm_state.tolist(),      # numpy.array -> list
-                            "qvel":    left_arm_dq.tolist(),
-                            "torque":  left_arm_tau_est.tolist(),
-                            "ddq":     left_arm_ddq.tolist(),
+                            "qpos":               left_arm_state.tolist(),
+                            "qvel":               left_arm_dq.tolist(),
+                            "torque":             left_arm_tau_est.tolist(),
+                            "ddq":                left_arm_ddq.tolist(),
+                            "external_torque":    left_arm_ext_tau.tolist(),
+                            "compensation_torque": left_arm_comp_tau.tolist(),
+                            "cartesian_pos":  state_l_pos.tolist(),
+                            "cartesian_axis_angle": state_l_aa.tolist(),
+                            "cartesian_vel": state_l_twist.tolist(),
+                            "cartesian_accel": state_l_accel.tolist(),
+                            "cartesian_external_wrench": state_l_ext_wrench.tolist(),
+                            "rotor_temperature": arm_temperatures[:7],
                         },
                         "right_arm": {
-                            "qpos":    right_arm_state.tolist(),
-                            "qvel":    right_arm_dq.tolist(),
-                            "torque":  right_arm_tau_est.tolist(),
-                            "ddq":     right_arm_ddq.tolist(),
+                            "qpos":               right_arm_state.tolist(),
+                            "qvel":               right_arm_dq.tolist(),
+                            "torque":             right_arm_tau_est.tolist(),
+                            "ddq":                right_arm_ddq.tolist(),
+                            "external_torque":    right_arm_ext_tau.tolist(),
+                            "compensation_torque": right_arm_comp_tau.tolist(),
+                            "cartesian_pos":  state_r_pos.tolist(),
+                            "cartesian_axis_angle": state_r_aa.tolist(),
+                            "cartesian_vel": state_r_twist.tolist(),
+                            "cartesian_accel": state_r_accel.tolist(),
+                            "cartesian_external_wrench": state_r_ext_wrench.tolist(),
+                            "rotor_temperature": arm_temperatures[7:],
                         },
                         "left_ee": {
                             "qpos":   left_ee_state,
@@ -615,17 +717,31 @@ if __name__ == '__main__':
                         "body": {
                             "qpos": current_body_state,
                         },
+                        "output_id": follower_tick,
+                        "output_timestamp": follower_timestamp,
                     }
                     actions = {
                         "left_arm": {
-                            "qpos":   left_arm_action.tolist(),
-                            "qvel":   [],
-                            "torque": left_arm_action_tauff.tolist(),
+                            "qpos":               left_arm_action.tolist(),
+                            "qvel":               left_arm_action_dq.tolist() if hasattr(left_arm_action_dq, 'tolist') else left_arm_action_dq,
+                            "torque":             left_arm_action_tauff.tolist(),
+                            "ddq":                left_arm_action_ddq.tolist() if hasattr(left_arm_action_ddq, 'tolist') else left_arm_action_ddq,
+                            "compensation_torque": left_arm_action_tauff.tolist(),
+                            "cartesian_pos":  action_l_pos.tolist(),
+                            "cartesian_axis_angle": action_l_aa.tolist(),
+                            "cartesian_vel": action_l_twist.tolist(),
+                            "cartesian_accel": action_l_accel.tolist(),
                         },
                         "right_arm": {
-                            "qpos":   right_arm_action.tolist(),
-                            "qvel":   [],
-                            "torque": right_arm_action_tauff.tolist(),
+                            "qpos":               right_arm_action.tolist(),
+                            "qvel":               right_arm_action_dq.tolist() if hasattr(right_arm_action_dq, 'tolist') else right_arm_action_dq,
+                            "torque":             right_arm_action_tauff.tolist(),
+                            "ddq":                right_arm_action_ddq.tolist() if hasattr(right_arm_action_ddq, 'tolist') else right_arm_action_ddq,
+                            "compensation_torque": right_arm_action_tauff.tolist(),
+                            "cartesian_pos":  action_r_pos.tolist(),
+                            "cartesian_axis_angle": action_r_aa.tolist(),
+                            "cartesian_vel": action_r_twist.tolist(),
+                            "cartesian_accel": action_r_accel.tolist(),
                         },
                         "left_ee": {
                             "qpos":   left_hand_action,
@@ -640,6 +756,8 @@ if __name__ == '__main__':
                         "body": {
                             "qpos": current_body_action,
                         },
+                        "output_id": leader_frame_count,
+                        "output_timestamp": leader_timestamp,
                     }
                     if args.sim:
                         sim_state = sim_state_subscriber.read_data()            
