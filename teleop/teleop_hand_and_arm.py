@@ -290,8 +290,6 @@ if __name__ == '__main__':
         # record + headless / non-headless mode
         if args.record:
             cam_h, cam_w = camera_config['head_camera']['image_shape']
-            if camera_config['head_camera']['binocular']:
-                cam_w = cam_w // 2
 
             # arm joint names per robot type (left then right, matching qpos order)
             ARM_JOINT_NAMES = {
@@ -642,39 +640,10 @@ if __name__ == '__main__':
                     depths = {}
                     if camera_config['head_camera'].get('enable_depth') and head_depth is not None:
                         depths['depth_0'] = head_depth
-                        if camera_config['head_camera']['binocular']:
-                            depths['depth_1'] = head_depth
-                    if camera_config['head_camera']['binocular']:
-                        if head_img is not None and head_img.bgr is not None:
-                            colors[f"color_{0}"] = head_img.bgr[:, :camera_config['head_camera']['image_shape'][1]//2]
-                            colors[f"color_{1}"] = head_img.bgr[:, camera_config['head_camera']['image_shape'][1]//2:]
-                        else:
-                            logger_mp.warning("Head image is None!")
-                        #if camera_config['left_wrist_camera']['enable_zmq']:
-                         #   if left_wrist_img is not None:
-                          #      colors[f"color_{2}"] = left_wrist_img.bgr
-                           # else:
-                            #    logger_mp.warning("Left wrist image is None!")
-                        #if camera_config['right_wrist_camera']['enable_zmq']:
-                         #   if right_wrist_img is not None:
-                          #      colors[f"color_{3}"] = right_wrist_img.bgr
-                           # else:
-                            #    logger_mp.warning("Right wrist image is None!")
+                    if head_img is not None and head_img.bgr is not None:
+                        colors[f"color_{0}"] = head_img.bgr
                     else:
-                        if head_img is not None:
-                            colors[f"color_{0}"] = head_img
-                        else:
-                            logger_mp.warning("Head image is None!")
-                        #if camera_config['left_wrist_camera']['enable_zmq']:
-                         #   if left_wrist_img is not None:
-                          #      colors[f"color_{1}"] = left_wrist_img.bgr
-                           # else:
-                            #    logger_mp.warning("Left wrist image is None!")
-                        #if camera_config['right_wrist_camera']['enable_zmq']:
-                         #   if right_wrist_img is not None:
-                          #      colors[f"color_{2}"] = right_wrist_img.bgr
-                           # else:
-                            #    logger_mp.warning("Right wrist image is None!")
+                        logger_mp.warning("Head image is None!")
                     states = {
                         "left_arm": {
                             "qpos":               left_arm_state.tolist(),
