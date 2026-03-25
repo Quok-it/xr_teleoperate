@@ -1,9 +1,11 @@
 import threading
 import logging
+import logging_mp
 import numpy as np
 import cv2
 
 logger = logging.getLogger(__name__)
+logger_mp = logging_mp.getLogger(__name__)
 
 
 def _fast_mat_inv(mat):
