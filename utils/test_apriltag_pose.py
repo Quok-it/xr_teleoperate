@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "teleop"))
 
 from teleimager.image_client import ImageClient
-from teleop.utils.apriltag_head_tracker import AprilTagHeadTracker
+from teleop.utils.apriltag_tracker import AprilTagTracker
 
 ROBOT_IP = sys.argv[1] if len(sys.argv) > 1 else "192.168.123.164"
 
@@ -21,7 +21,7 @@ if not intr:
 
 print(f"Intrinsics: fx={intr['fx']:.1f} fy={intr['fy']:.1f} cx={intr['cx']:.1f} cy={intr['cy']:.1f}")
 
-tracker = AprilTagHeadTracker(
+tracker = AprilTagTracker(
     camera_params=(intr['fx'], intr['fy'], intr['cx'], intr['cy']),
 )
 

@@ -127,8 +127,8 @@ if __name__ == '__main__':
         head_tracker = None
         intr = camera_config['head_camera'].get('intrinsics')
         if intr:
-            from teleop.utils.apriltag_head_tracker import AprilTagHeadTracker
-            head_tracker = AprilTagHeadTracker(
+            from teleop.utils.apriltag_tracker import AprilTagTracker
+            head_tracker = AprilTagTracker(
                 camera_params=(intr['fx'], intr['fy'], intr['cx'], intr['cy']),
             )
             logger_mp.info("AprilTag head tracker initialized.")
@@ -138,8 +138,8 @@ if __name__ == '__main__':
         # surrounding camera (local RealSense D405)
         surround_cam = SurroundCamera()
         logger_mp.info("Surrounding camera initialized.")
-        from teleop.utils.apriltag_head_tracker import AprilTagHeadTracker as _AT
-        surround_tracker = _AT(
+        from teleop.utils.apriltag_tracker import AprilTagTracker
+        surround_tracker = AprilTagTracker(
             camera_params=(surround_cam.intrinsics['fx'], surround_cam.intrinsics['fy'],
                            surround_cam.intrinsics['cx'], surround_cam.intrinsics['cy']),
         )

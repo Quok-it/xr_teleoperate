@@ -14,8 +14,8 @@ def _fast_mat_inv(mat):
     return ret
 
 
-class AprilTagHeadTracker:
-    """Detects a fixed AprilTag in the environment and estimates the camera (head) pose
+class AprilTagTracker:
+    """Detects a fixed AprilTag in the environment and estimates the camera pose
     in the tag's coordinate frame (world frame).
 
     All public methods are non-blocking. Detection runs in a background daemon thread.
@@ -27,7 +27,7 @@ class AprilTagHeadTracker:
         target_tag_id: Which tag ID to track.
     """
 
-    def __init__(self, camera_params, tag_family="tagStandard41h12", tag_size=0.2, target_tag_id=2):
+    def __init__(self, camera_params, tag_family="tagStandard41h12", tag_size=0.105, target_tag_id=2):
         try:
             from pupil_apriltags import Detector
         except ImportError:
@@ -51,7 +51,7 @@ class AprilTagHeadTracker:
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._detection_loop, daemon=True)
         self._thread.start()
-        logger.info(f"AprilTagHeadTracker started: family={tag_family}, size={tag_size}m, id={target_tag_id}")
+        logger.info(f"AprilTagTracker started: family={tag_family}, size={tag_size}m, id={target_tag_id}")
 
     def update_frame(self, bgr_frame):
         """Non-blocking: provide the latest BGR frame for detection."""
@@ -68,7 +68,7 @@ class AprilTagHeadTracker:
         """Stop the detection thread."""
         self._stop_event.set()
         self._thread.join(timeout=2.0)
-        logger.info("AprilTagHeadTracker stopped.")
+        logger.info("AprilTagTracker stopped.")
 
     def _detection_loop(self):
         frames_since_detection = 0
