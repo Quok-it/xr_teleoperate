@@ -29,6 +29,9 @@ try:
     while True:
         head_img = img_client.get_head_frame()
         if head_img is not None and head_img.bgr is not None:
+            import cv2
+            cv2.imwrite("/tmp/head_frame.png", head_img.bgr)
+            break
             tracker.update_frame(head_img.bgr)
 
         pose, detected = tracker.get_pose()

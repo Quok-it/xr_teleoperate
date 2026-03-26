@@ -12,11 +12,12 @@ import zmq
 
 
 class DepthReceiver:
-    def __init__(self, host, port, height, width):
+    def __init__(self, host, port, height, width, raw=False):
         self.host = host
         self.port = port
         self.h = height
         self.w = width
+        self.raw = raw
         self._frame = None
         self._lock = threading.Lock()
         self._ctx = zmq.Context()
@@ -42,12 +43,17 @@ class DepthReceiver:
                     print(f"Bad frame: got {len(data)} bytes, expected {expected}")
                     continue
                 depth = np.frombuffer(data, dtype=np.uint16).reshape(self.h, self.w)
-                # D435i operating range: 0.3m–3m, fixed range avoids per-frame flicker
-                depth_clipped = np.clip(depth, 300, 3000)
-                depth_norm = ((depth_clipped - 300) * (255.0 / 2700)).astype(np.uint8)
-                colored = cv2.applyColorMap(depth_norm, cv2.COLORMAP_TURBO)
-                colored[depth == 0] = 0
-                _, jpg = cv2.imencode('.jpg', colored, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if self.raw:
+                    # Raw: scale 0–3m range to 0–255 grayscale
+                    gray = (np.clip(depth, 0, 3000) * (255.0 / 3000)).astype(np.uint8)
+                    _, jpg = cv2.imencode('.jpg', gray, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                else:
+                    # D435i operating range: 0.3m–3m, fixed range avoids per-frame flicker
+                    depth_clipped = np.clip(depth, 300, 3000)
+                    depth_norm = ((depth_clipped - 300) * (255.0 / 2700)).astype(np.uint8)
+                    colored = cv2.applyColorMap(depth_norm, cv2.COLORMAP_TURBO)
+                    colored[depth == 0] = 0
+                    _, jpg = cv2.imencode('.jpg', colored, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 with self._lock:
                     self._frame = jpg.tobytes()
 
@@ -104,9 +110,10 @@ def main():
     parser.add_argument('--http-port', type=int, default=8080, help='HTTP server port')
     parser.add_argument('--height', type=int, default=720)
     parser.add_argument('--width', type=int, default=1280)
+    parser.add_argument('--raw', action='store_true', help='Show raw grayscale depth (no colormap/clipping)')
     args = parser.parse_args()
 
-    receiver = DepthReceiver(args.host, args.depth_port, args.height, args.width)
+    receiver = DepthReceiver(args.host, args.depth_port, args.height, args.width, raw=args.raw)
     server = HTTPServer(('0.0.0.0', args.http_port), make_handler(receiver))
     print(f"Depth viewer running at http://localhost:{args.http_port}")
 
