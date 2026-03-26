@@ -1,11 +1,9 @@
 import threading
 import logging
-import logging_mp
 import numpy as np
 import cv2
 
 logger = logging.getLogger(__name__)
-logger_mp = logging_mp.getLogger(__name__)
 
 
 def _fast_mat_inv(mat):
@@ -48,6 +46,7 @@ class AprilTagHeadTracker:
         # Latest pose result (lock-protected)
         self._pose_lock = threading.Lock()
         self._latest_pose = None  # (4,4) SE(3) T_world_camera or None
+        self._detected = False    # whether the tag was seen in the latest frame
 
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._detection_loop, daemon=True)
@@ -60,9 +59,10 @@ class AprilTagHeadTracker:
             self._latest_frame = bgr_frame
 
     def get_pose(self):
-        """Non-blocking: return the latest head pose as (4,4) SE(3) matrix, or None if no tag detected."""
+        """Non-blocking: return (pose, detected) where pose is a (4,4) SE(3) matrix
+        (or None if never detected) and detected is whether the tag was seen in the latest frame."""
         with self._pose_lock:
-            return self._latest_pose
+            return self._latest_pose, self._detected
 
     def stop(self):
         """Stop the detection thread."""
@@ -112,11 +112,14 @@ class AprilTagHeadTracker:
 
                 with self._pose_lock:
                     self._latest_pose = T_world_camera
+                    self._detected = True
 
                 frames_since_detection = 0
                 pos = T_world_camera[:3, 3]
                 logger.debug(f"AprilTag {self._target_tag_id} detected: x={pos[0]:.3f} y={pos[1]:.3f} z={pos[2]:.3f}")
             else:
+                with self._pose_lock:
+                    self._detected = False
                 frames_since_detection += 1
                 if frames_since_detection == 60:  # ~2 seconds at 30fps
                     logger.warning(f"AprilTag {self._target_tag_id} not detected for ~2 seconds")
