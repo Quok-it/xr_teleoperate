@@ -34,18 +34,24 @@ class Brainco_Controller:
 
 
         # initialize handcmd publisher and handstate subscriber
-        self.LeftHandCmb_publisher = ChannelPublisher(kTopicbraincoLeftCommand, MotorCmds_)
-        self.LeftHandCmb_publisher.Init()
+        self.has_left_hand = left_hand_array is not None
+
+        if self.has_left_hand:
+            self.LeftHandCmb_publisher = ChannelPublisher(kTopicbraincoLeftCommand, MotorCmds_)
+            self.LeftHandCmb_publisher.Init()
+            self.LeftHandState_subscriber = ChannelSubscriber(kTopicbraincoLeftState, MotorStates_)
+            self.LeftHandState_subscriber.Init()
+
         self.RightHandCmb_publisher = ChannelPublisher(kTopicbraincoRightCommand, MotorCmds_)
         self.RightHandCmb_publisher.Init()
-
-        self.LeftHandState_subscriber = ChannelSubscriber(kTopicbraincoLeftState, MotorStates_)
-        self.LeftHandState_subscriber.Init()
         self.RightHandState_subscriber = ChannelSubscriber(kTopicbraincoRightState, MotorStates_)
         self.RightHandState_subscriber.Init()
 
         # Shared Arrays for hand states
-        self.left_hand_state_array  = Array('d', brainco_Num_Motors, lock=True)  
+        if self.has_left_hand:
+            self.left_hand_state_array = Array('d', brainco_Num_Motors, lock=True)
+        else:
+            self.left_hand_state_array = None
         self.right_hand_state_array = Array('d', brainco_Num_Motors, lock=True)
 
         # initialize subscribe thread
@@ -67,14 +73,15 @@ class Brainco_Controller:
 
     def _subscribe_hand_state(self):
         while True:
-            left_hand_msg  = self.LeftHandState_subscriber.Read()
+            if self.has_left_hand:
+                left_hand_msg = self.LeftHandState_subscriber.Read()
+                if left_hand_msg is not None:
+                    for idx, id in enumerate(Brainco_Left_Hand_JointIndex):
+                        self.left_hand_state_array[idx] = left_hand_msg.states[id].q
+
             right_hand_msg = self.RightHandState_subscriber.Read()
             self.hand_sub_ready = True
-            if left_hand_msg is not None and right_hand_msg is not None:
-                # Update left hand state
-                for idx, id in enumerate(Brainco_Left_Hand_JointIndex):
-                    self.left_hand_state_array[idx] = left_hand_msg.states[id].q
-                # Update right hand state
+            if right_hand_msg is not None:
                 for idx, id in enumerate(Brainco_Right_Hand_JointIndex):
                     self.right_hand_state_array[idx] = right_hand_msg.states[id].q
             time.sleep(0.002)
@@ -83,12 +90,12 @@ class Brainco_Controller:
         """
         Set current left, right hand motor state target q
         """
-        for idx, id in enumerate(Brainco_Left_Hand_JointIndex):             
-            self.left_hand_msg.cmds[id].q = left_q_target[idx]
-        for idx, id in enumerate(Brainco_Right_Hand_JointIndex):             
-            self.right_hand_msg.cmds[id].q = right_q_target[idx] 
-
-        self.LeftHandCmb_publisher.Write(self.left_hand_msg)
+        if self.has_left_hand:
+            for idx, id in enumerate(Brainco_Left_Hand_JointIndex):
+                self.left_hand_msg.cmds[id].q = left_q_target[idx]
+            self.LeftHandCmb_publisher.Write(self.left_hand_msg)
+        for idx, id in enumerate(Brainco_Right_Hand_JointIndex):
+            self.right_hand_msg.cmds[id].q = right_q_target[idx]
         self.RightHandCmb_publisher.Write(self.right_hand_msg)
         # logger_mp.debug("hand ctrl publish ok.")
     
@@ -100,14 +107,15 @@ class Brainco_Controller:
         right_q_target = np.full(brainco_Num_Motors, 0)
 
         # initialize brainco hand's cmd msg
-        self.left_hand_msg  = MotorCmds_()
-        self.left_hand_msg.cmds = [unitree_go_msg_dds__MotorCmd_() for _ in range(len(Brainco_Left_Hand_JointIndex))]
+        if self.has_left_hand:
+            self.left_hand_msg = MotorCmds_()
+            self.left_hand_msg.cmds = [unitree_go_msg_dds__MotorCmd_() for _ in range(len(Brainco_Left_Hand_JointIndex))]
+            for idx, id in enumerate(Brainco_Left_Hand_JointIndex):
+                self.left_hand_msg.cmds[id].q = 0.0
+                self.left_hand_msg.cmds[id].dq = 1.0
+
         self.right_hand_msg = MotorCmds_()
         self.right_hand_msg.cmds = [unitree_go_msg_dds__MotorCmd_() for _ in range(len(Brainco_Right_Hand_JointIndex))]
-
-        for idx, id in enumerate(Brainco_Left_Hand_JointIndex):
-            self.left_hand_msg.cmds[id].q = 0.0
-            self.left_hand_msg.cmds[id].dq = 1.0
         for idx, id in enumerate(Brainco_Right_Hand_JointIndex):
             self.right_hand_msg.cmds[id].q = 0.0
             self.right_hand_msg.cmds[id].dq = 1.0
@@ -116,20 +124,23 @@ class Brainco_Controller:
             while self.running:
                 start_time = time.time()
                 # get dual hand state
-                with left_hand_array.get_lock():
-                    left_hand_data  = np.array(left_hand_array[:]).reshape(25, 3).copy()
+                if self.has_left_hand:
+                    with left_hand_array.get_lock():
+                        left_hand_data = np.array(left_hand_array[:]).reshape(25, 3).copy()
                 with right_hand_array.get_lock():
                     right_hand_data = np.array(right_hand_array[:]).reshape(25, 3).copy()
 
                 # Read left and right q_state from shared arrays
-                state_data = np.concatenate((np.array(left_hand_state_array[:]), np.array(right_hand_state_array[:])))
+                left_state = np.array(left_hand_state_array[:]) if self.has_left_hand else np.zeros(brainco_Num_Motors)
+                state_data = np.concatenate((left_state, np.array(right_hand_state_array[:])))
 
-                if not np.all(right_hand_data == 0.0) and not np.all(left_hand_data[4] == np.array([-1.13, 0.3, 0.15])): # if hand data has been initialized.
-                    ref_left_value = left_hand_data[self.hand_retargeting.left_indices[1,:]] - left_hand_data[self.hand_retargeting.left_indices[0,:]]
+                if not np.all(right_hand_data == 0.0): # if hand data has been initialized.
                     ref_right_value = right_hand_data[self.hand_retargeting.right_indices[1,:]] - right_hand_data[self.hand_retargeting.right_indices[0,:]]
-
-                    left_q_target  = self.hand_retargeting.left_retargeting.retarget(ref_left_value)[self.hand_retargeting.left_dex_retargeting_to_hardware]
                     right_q_target = self.hand_retargeting.right_retargeting.retarget(ref_right_value)[self.hand_retargeting.right_dex_retargeting_to_hardware]
+
+                    if self.has_left_hand and not np.all(left_hand_data[4] == np.array([-1.13, 0.3, 0.15])):
+                        ref_left_value = left_hand_data[self.hand_retargeting.left_indices[1,:]] - left_hand_data[self.hand_retargeting.left_indices[0,:]]
+                        left_q_target = self.hand_retargeting.left_retargeting.retarget(ref_left_value)[self.hand_retargeting.left_dex_retargeting_to_hardware]
 
                     # In the official document, the angles are in the range [0, 1] ==> 0.0: fully open  1.0: fully closed
                     # The q_target now is in radians, ranges:
