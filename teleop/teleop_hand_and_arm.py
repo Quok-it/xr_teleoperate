@@ -122,6 +122,18 @@ if __name__ == '__main__':
         camera_config = img_client.get_cam_config()
         logger_mp.debug(f"Camera config: {camera_config}")
 
+        # apriltag head tracker
+        head_tracker = None
+        intr = camera_config['head_camera'].get('intrinsics')
+        if intr:
+            from teleop.utils.apriltag_head_tracker import AprilTagHeadTracker
+            head_tracker = AprilTagHeadTracker(
+                camera_params=(intr['fx'], intr['fy'], intr['cx'], intr['cy']),
+            )
+            logger_mp.info("AprilTag head tracker initialized.")
+        else:
+            logger_mp.warning("No camera intrinsics in cam_config — AprilTag head tracking disabled.")
+
         xr_need_local_img = not (args.display_mode == 'pass-through' or camera_config['head_camera']['enable_webrtc'])
 
         # televuer_wrapper: obtain hand pose data from the XR device and transmit the robot's head camera image to the XR device.
@@ -199,7 +211,7 @@ if __name__ == '__main__':
                 hand_ctrl = Inspire_Controller_FTP(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock, dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
             elif args.ee == "brainco":
                 from teleop.robot_control.robot_hand_brainco import Brainco_Controller
-                left_hand_pos_array = Array('d', 75, lock = True)
+                left_hand_pos_array = None  # no left hand connected
                 right_hand_pos_array = Array('d', 75, lock = True)
                 dual_hand_data_lock = Lock()
                 dual_hand_state_array = Array('d', 12, lock = False)
@@ -339,6 +351,31 @@ if __name__ == '__main__':
             ee_names = EE_JOINT_NAMES.get(args.ee, {"left_ee": [], "right_ee": []})
             joint_names = {**arm_names, **ee_names, "body": []}
 
+            # build metadata from camera_config and args
+            head_cam_cfg = camera_config.get('head_camera', {})
+            camera_metadata = {
+                "id": "head_camera",
+                "serial_number": head_cam_cfg.get('serial_number'),
+                "frame": "world",
+                "color_intrinsics": head_cam_cfg.get('color_intrinsics'),
+                "depth_intrinsics": head_cam_cfg.get('depth_intrinsics'),
+                "depth_scale": head_cam_cfg.get('depth_scale'),
+            }
+            metadata = {
+                "robot_config": {
+                    "arm_type": args.arm,
+                    "ee_type": args.ee,
+                    "control_frequency": args.frequency,
+                    "img_server_ip": args.img_server_ip,
+                },
+                "camera_config": {
+                    "width": cam_w,
+                    "height": cam_h,
+                    "fps": head_cam_cfg.get('fps', args.frequency),
+                    "cameras": [camera_metadata],
+                },
+            }
+
             recorder = EpisodeWriter(task_dir = os.path.join(args.task_dir, args.task_name),
                                      task_goal = args.task_goal,
                                      task_desc = args.task_desc,
@@ -346,6 +383,7 @@ if __name__ == '__main__':
                                      frequency = args.frequency,
                                      image_size = [cam_w, cam_h],
                                      joint_names = joint_names,
+                                     metadata = metadata,
                                      rerun_log = not args.headless)
 
         logger_mp.info("----------------------------------------------------------------")
@@ -386,13 +424,18 @@ if __name__ == '__main__':
             if camera_config['head_camera']['enable_zmq']:
                 if args.record or xr_need_local_img:
                     head_img = img_client.get_head_frame()
-                    tv_wrapper.render_to_xr(head_img)
+                    if xr_need_local_img:
+                        tv_wrapper.render_to_xr(head_img)
             if camera_config['head_camera'].get('enable_depth') and args.record:
                 try:
                     head_depth = img_client.get_head_depth_frame()
                 except Exception as e:
                     logger_mp.warning(f"[Depth] get_head_depth_frame failed: {e}")
                     head_depth = None
+            # feed frame to apriltag head tracker
+            if head_tracker is not None and head_img is not None and head_img.bgr is not None:
+                head_tracker.update_frame(head_img.bgr)
+
             #if camera_config['left_wrist_camera']['enable_zmq']:
              #   if args.record:
               #      left_wrist_img = img_client.get_left_wrist_frame()
@@ -404,6 +447,15 @@ if __name__ == '__main__':
             if args.record and RECORD_TOGGLE:
                 RECORD_TOGGLE = False
                 if not RECORD_RUNNING:
+                    # snapshot measured frequencies into robot metadata
+                    metadata['robot_config']['control_frequency'] = arm_ctrl.measured_control_hz
+                    metadata['robot_config']['state_frequency'] = arm_ctrl.measured_state_hz
+                    # snapshot AprilTag extrinsic into camera metadata
+                    if head_tracker is not None:
+                        pose, detected = head_tracker.get_pose()
+                        if pose is not None:
+                            metadata['camera_config']['cameras'][0]['extrinsics'] = pose.tolist()
+                    recorder.info.update(metadata)
                     if recorder.create_episode():
                         RECORD_RUNNING = True
                         if args.input_mode == "waldo":
@@ -427,9 +479,11 @@ if __name__ == '__main__':
             if args.input_mode != "waldo":
                 # get xr's tele data
                 tele_data = tv_wrapper.get_tele_data()
+                logger_mp.info(f"L_wrist: {tele_data.left_wrist_pose[:3,3].round(3)}  R_wrist: {tele_data.right_wrist_pose[:3,3].round(3)}  R_hand_nz: {np.count_nonzero(tele_data.right_hand_pos)}")
                 if (args.ee == "dex3" or args.ee == "inspire_dfx" or args.ee == "inspire_ftp" or args.ee == "brainco") and args.input_mode == "hand":
-                    with left_hand_pos_array.get_lock():
-                        left_hand_pos_array[:] = tele_data.left_hand_pos.flatten()
+                    if left_hand_pos_array is not None:
+                        with left_hand_pos_array.get_lock():
+                            left_hand_pos_array[:] = tele_data.left_hand_pos.flatten()
                     with right_hand_pos_array.get_lock():
                         right_hand_pos_array[:] = tele_data.right_hand_pos.flatten()
                 elif args.ee == "dex1" and args.input_mode == "controller":
@@ -477,7 +531,7 @@ if __name__ == '__main__':
                 time_ik_start = time.time()
                 sol_q, sol_tauff  = arm_ik.solve_ik(tele_data.left_wrist_pose, tele_data.right_wrist_pose, current_lr_arm_q, current_lr_arm_dq)
                 time_ik_end = time.time()
-                logger_mp.debug(f"ik:\t{round(time_ik_end - time_ik_start, 6)}")
+                logger_mp.info(f"ik:{round(time_ik_end - time_ik_start, 4)}s  sol_q_elbows:[{sol_q[3]:.3f},{sol_q[10]:.3f}]  cur_q_elbows:[{current_lr_arm_q[3]:.3f},{current_lr_arm_q[10]:.3f}]  vel_limit:{arm_ctrl.arm_velocity_limit:.1f}")
                 arm_ctrl.ctrl_dual_arm(sol_q, sol_tauff)
             else:
                 # Waldo arms: no main-loop work needed. Waldo_Arm_Controller runs its own
@@ -695,9 +749,29 @@ if __name__ == '__main__':
                         "body": {
                             "qpos": current_body_state,
                         },
+                        "head": {},
                         "output_id": follower_tick,
                         "output_timestamp": follower_timestamp,
                     }
+                    # apriltag head pose
+                    if head_tracker is not None:
+                        head_pose, head_detected = head_tracker.get_pose()
+                    else:
+                        head_pose, head_detected = None, False
+                    if head_pose is not None:
+                        states["head"] = {
+                            "position": head_pose[:3, 3].tolist(),
+                            "rotation": head_pose[:3, :3].tolist(),
+                            "pose_matrix": head_pose.tolist(),
+                            "detected": head_detected,
+                        }
+                    else:
+                        states["head"] = {
+                            "position": [0.0, 0.0, 0.0],
+                            "rotation": [[0.0]*3]*3,
+                            "pose_matrix": [[0.0]*4]*4,
+                            "detected": False,
+                        }
                     actions = {
                         "left_arm": {
                             "qpos":               left_arm_action.tolist(),
@@ -776,6 +850,12 @@ if __name__ == '__main__':
         except Exception as e:
             logger_mp.error(f"Failed to stop keyboard listener or ipc server: {e}")
         
+        try:
+            if head_tracker is not None:
+                head_tracker.stop()
+        except Exception as e:
+            logger_mp.error(f"Failed to stop head tracker: {e}")
+
         try:
             img_client.close()
         except Exception as e:

@@ -73,6 +73,14 @@ class Waldo_Arm_Controller:
 
         logger_mp.info("Initialize Waldo_Arm_Controller OK!")
 
+    @property
+    def measured_state_hz(self):
+        return self.arm_ctrl.measured_state_hz
+
+    @property
+    def measured_control_hz(self):
+        return self.arm_ctrl.measured_control_hz
+
     def start(self):
         """Activate: forward ZMQ data to robot."""
         # restore gains for active control
@@ -330,5 +338,5 @@ class Waldo_Arm_Controller:
     def stop(self):
         """Idle: block ZMQ and return arms home."""
         self._idle = True
-        self.arm_ctrl.arm_velocity_limit = 0.5
+        self.arm_ctrl.arm_velocity_limit = 1
         self.arm_ctrl.ctrl_dual_arm_go_home()
