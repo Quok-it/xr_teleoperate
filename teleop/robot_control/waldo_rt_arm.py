@@ -56,7 +56,19 @@ class Waldo_Arm_Controller:
 
         # reduced pinocchio model for RNEA / FK computation
         from teleop.robot_control.arm_pink_real import load_model
-        self._rnea_model, self._rnea_data, self._left_frame_id, self._right_frame_id, _ = load_model()
+        self._rnea_model, self._rnea_data, self._left_frame_id, self._right_frame_id, model_full = load_model()
+
+        # Fixed transform: FK base (pelvis) → head camera (d435).
+        # The reduced model locks waist at neutral, so this is constant.
+        data_full = model_full.createData()
+        q_neutral = pin.neutral(model_full)
+        pin.forwardKinematics(model_full, data_full, q_neutral)
+        pin.updateFramePlacements(model_full, data_full)
+        d435_id = model_full.getFrameId("d435_link")
+        T_base_cam = data_full.oMf[d435_id]
+        self._T_cam_base = T_base_cam.inverse()          # SE3
+        self.R_cam_base = np.array(self._T_cam_base.rotation)  # (3,3)
+        logger_mp.info(f"T_cam_base translation: {self._T_cam_base.translation}")
 
         # start control loop thread (publishes zeros while idle / waiting for ZMQ)
         self._ctrl_thread = threading.Thread(target=self._control_loop, daemon=True)
@@ -199,15 +211,16 @@ class Waldo_Arm_Controller:
             return self._sol_timestamp
 
     def _fk_wrist_poses(self, q):
-        """Run FK and return (left_pos, left_axisangle, right_pos, right_axisangle)."""
+        """Run FK and return (left_pos, left_axisangle, right_pos, right_axisangle)
+        in head camera (d435) frame."""
         pin.forwardKinematics(self._rnea_model, self._rnea_data, q)
         pin.updateFramePlacements(self._rnea_model, self._rnea_data)
-        left_se3 = self._rnea_data.oMf[self._left_frame_id]
-        right_se3 = self._rnea_data.oMf[self._right_frame_id]
-        left_aa = pin.log3(left_se3.rotation)
-        right_aa = pin.log3(right_se3.rotation)
-        return (left_se3.translation.copy(), left_aa,
-                right_se3.translation.copy(), right_aa)
+        left_cam = self._T_cam_base * self._rnea_data.oMf[self._left_frame_id]
+        right_cam = self._T_cam_base * self._rnea_data.oMf[self._right_frame_id]
+        left_aa = pin.log3(left_cam.rotation)
+        right_aa = pin.log3(right_cam.rotation)
+        return (left_cam.translation.copy(), left_aa,
+                right_cam.translation.copy(), right_aa)
 
     def get_current_dual_arm_cartesian_pos(self):
         """Return FK cartesian poses at current sensed joint positions."""
@@ -220,15 +233,23 @@ class Waldo_Arm_Controller:
             q = self._sol_q.copy()
         return self._fk_wrist_poses(q)
 
+    def _rotate_6d(self, v):
+        """Rotate a 6D spatial vector (twist/accel/wrench) from base to camera frame."""
+        R = self.R_cam_base
+        out = np.empty(6)
+        out[:3] = R @ v[:3]
+        out[3:] = R @ v[3:]
+        return out
+
     def _fk_wrist_velocities(self, q, dq):
-        """Run FK + Jacobian and return (left_twist_6d, right_twist_6d)."""
+        """Run FK + Jacobian and return (left_twist_6d, right_twist_6d) in camera frame."""
         pin.forwardKinematics(self._rnea_model, self._rnea_data, q)
         pin.updateFramePlacements(self._rnea_model, self._rnea_data)
         J_l = pin.computeFrameJacobian(self._rnea_model, self._rnea_data, q,
                                         self._left_frame_id, pin.LOCAL_WORLD_ALIGNED)
         J_r = pin.computeFrameJacobian(self._rnea_model, self._rnea_data, q,
                                         self._right_frame_id, pin.LOCAL_WORLD_ALIGNED)
-        return J_l @ dq, J_r @ dq
+        return self._rotate_6d(J_l @ dq), self._rotate_6d(J_r @ dq)
 
     def get_current_dual_arm_cartesian_vel(self):
         """Return 6D cartesian twist at current sensed state."""
@@ -244,7 +265,7 @@ class Waldo_Arm_Controller:
         return self._fk_wrist_velocities(q, dq)
 
     def _fk_wrist_accelerations(self, q, dq, ddq):
-        """Run FK with accelerations and return (left_accel_6d, right_accel_6d)."""
+        """Run FK with accelerations and return (left_accel_6d, right_accel_6d) in camera frame."""
         pin.forwardKinematics(self._rnea_model, self._rnea_data, q, dq, ddq)
         pin.updateFramePlacements(self._rnea_model, self._rnea_data)
         left_a = pin.getFrameClassicalAcceleration(
@@ -253,7 +274,7 @@ class Waldo_Arm_Controller:
         right_a = pin.getFrameClassicalAcceleration(
             self._rnea_model, self._rnea_data,
             self._right_frame_id, pin.LOCAL_WORLD_ALIGNED)
-        return left_a.vector.copy(), right_a.vector.copy()
+        return self._rotate_6d(left_a.vector), self._rotate_6d(right_a.vector)
 
     def get_current_dual_arm_cartesian_accel(self):
         """Return 6D cartesian acceleration at current sensed state."""
@@ -286,7 +307,7 @@ class Waldo_Arm_Controller:
         # J^{-T} @ tau = (J @ J^T)^{-1} @ J @ tau  (pseudoinverse transpose)
         wrench_l = np.linalg.lstsq(J_l.T, tau_ext[:7], rcond=None)[0]
         wrench_r = np.linalg.lstsq(J_r.T, tau_ext[7:], rcond=None)[0]
-        return wrench_l, wrench_r
+        return self._rotate_6d(wrench_l), self._rotate_6d(wrench_r)
 
     def get_current_dual_arm_compensation_tau(self):
         """Return dynamics compensation torque: rnea(q_sensed, dq_sensed, 0)."""

@@ -20,6 +20,7 @@ from teleop.robot_control.robot_arm import G1_29_ArmController, G1_23_ArmControl
 from teleop.robot_control.robot_arm_ik import G1_29_ArmIK, G1_23_ArmIK, H1_2_ArmIK, H1_ArmIK
 from teleimager.image_client import ImageClient
 from teleop.utils.episode_writer import EpisodeWriter
+from teleop.utils.surround_camera import SurroundCamera
 from teleop.utils.ipc import IPC_Server
 from teleop.utils.motion_switcher import MotionSwitcher, LocoClientWrapper
 from sshkeyboard import listen_keyboard, stop_listening
@@ -133,6 +134,16 @@ if __name__ == '__main__':
             logger_mp.info("AprilTag head tracker initialized.")
         else:
             logger_mp.warning("No camera intrinsics in cam_config — AprilTag head tracking disabled.")
+
+        # surrounding camera (local RealSense D405)
+        surround_cam = SurroundCamera()
+        logger_mp.info("Surrounding camera initialized.")
+        from teleop.utils.apriltag_head_tracker import AprilTagHeadTracker as _AT
+        surround_tracker = _AT(
+            camera_params=(surround_cam.intrinsics['fx'], surround_cam.intrinsics['fy'],
+                           surround_cam.intrinsics['cx'], surround_cam.intrinsics['cy']),
+        )
+        logger_mp.info("AprilTag surround tracker initialized.")
 
         xr_need_local_img = not (args.display_mode == 'pass-through' or camera_config['head_camera']['enable_webrtc'])
 
@@ -266,10 +277,14 @@ if __name__ == '__main__':
                 dual_hand_data_lock = Lock()
                 dual_hand_state_array = Array('d', 12, lock=False)   # [output] left(6) + right(6) hand state
                 dual_hand_action_array = Array('d', 12, lock=False)  # [output] left(6) + right(6) hand action
+                dual_hand_dq_array = Array('d', 12, lock=False)      # [output] left(6) + right(6) hand velocity
+                dual_hand_tau_array = Array('d', 12, lock=False)     # [output] left(6) + right(6) hand current
                 hand_ctrl = Waldo_Brainco_Controller(
                     dual_hand_data_lock=dual_hand_data_lock,
                     dual_hand_state_array=dual_hand_state_array,
                     dual_hand_action_array=dual_hand_action_array,
+                    dual_hand_dq_array=dual_hand_dq_array,
+                    dual_hand_tau_array=dual_hand_tau_array,
                     simulation_mode=args.sim,
                 )
             else:
@@ -361,6 +376,14 @@ if __name__ == '__main__':
                 "depth_intrinsics": head_cam_cfg.get('depth_intrinsics'),
                 "depth_scale": head_cam_cfg.get('depth_scale'),
             }
+            surround_metadata = {
+                "id": "surround_camera",
+                "serial_number": surround_cam.serial,
+                "frame": "world",
+                "color_intrinsics": surround_cam.color_intrinsics,
+                "depth_intrinsics": surround_cam.depth_intrinsics,
+                "depth_scale": surround_cam.depth_scale,
+            }
             metadata = {
                 "robot_config": {
                     "arm_type": args.arm,
@@ -372,7 +395,7 @@ if __name__ == '__main__':
                     "width": cam_w,
                     "height": cam_h,
                     "fps": head_cam_cfg.get('fps', args.frequency),
-                    "cameras": [camera_metadata],
+                    "cameras": [camera_metadata, surround_metadata],
                 },
             }
 
@@ -436,6 +459,13 @@ if __name__ == '__main__':
             if head_tracker is not None and head_img is not None and head_img.bgr is not None:
                 head_tracker.update_frame(head_img.bgr)
 
+            # get surrounding camera image
+            surround_img = surround_cam.get_frame()
+            surround_depth = surround_cam.get_depth_frame()
+            # feed frame to apriltag surround tracker
+            if surround_img is not None and surround_img.bgr is not None:
+                surround_tracker.update_frame(surround_img.bgr)
+
             #if camera_config['left_wrist_camera']['enable_zmq']:
              #   if args.record:
               #      left_wrist_img = img_client.get_left_wrist_frame()
@@ -455,6 +485,9 @@ if __name__ == '__main__':
                         pose, detected = head_tracker.get_pose()
                         if pose is not None:
                             metadata['camera_config']['cameras'][0]['extrinsics'] = pose.tolist()
+                    surround_pose, surround_detected = surround_tracker.get_pose()
+                    if surround_pose is not None:
+                        metadata['camera_config']['cameras'][1]['extrinsics'] = surround_pose.tolist()
                     recorder.info.update(metadata)
                     if recorder.create_episode():
                         RECORD_RUNNING = True
@@ -639,6 +672,10 @@ if __name__ == '__main__':
                             right_ee_state = dual_hand_state_array[-6:]
                             left_hand_action = dual_hand_action_array[:6]
                             right_hand_action = dual_hand_action_array[-6:]
+                            left_ee_dq = list(dual_hand_dq_array[:6])
+                            right_ee_dq = list(dual_hand_dq_array[-6:])
+                            left_ee_tau = list(dual_hand_tau_array[:6])
+                            right_ee_tau = list(dual_hand_tau_array[-6:])
 
                     current_body_state = []
                     current_body_action = []
@@ -707,6 +744,17 @@ if __name__ == '__main__':
                         colors[f"color_{0}"] = head_img.bgr
                     else:
                         logger_mp.warning("Head image is None!")
+                    # surrounding camera
+                    if surround_img is not None and surround_img.bgr is not None:
+                        colors["color_1"] = surround_img.bgr
+                    if surround_depth is not None:
+                        depths['depth_1'] = surround_depth
+                        # D405: depth_scale≈0.0001, 1m = 10000 raw units
+                        depth_clipped_s = np.clip(surround_depth, 0, 30000)
+                        depth_norm_s = (depth_clipped_s * (255.0 / 30000)).astype(np.uint8)
+                        depth_colored_s = cv2.applyColorMap(depth_norm_s, cv2.COLORMAP_TURBO)
+                        depth_colored_s[surround_depth == 0] = 0
+                        depths['depth_1_rgb'] = depth_colored_s
                     states = {
                         "left_arm": {
                             "qpos":               left_arm_state.tolist(),
@@ -738,13 +786,13 @@ if __name__ == '__main__':
                         },
                         "left_ee": {
                             "qpos":   left_ee_state,
-                            "qvel":   [],
-                            "torque": [],
+                            "qvel":   left_ee_dq if args.input_mode == "waldo" and args.ee == "brainco" else [],
+                            "torque": left_ee_tau if args.input_mode == "waldo" and args.ee == "brainco" else [],
                         },
                         "right_ee": {
                             "qpos":   right_ee_state,
-                            "qvel":   [],
-                            "torque": [],
+                            "qvel":   right_ee_dq if args.input_mode == "waldo" and args.ee == "brainco" else [],
+                            "torque": right_ee_tau if args.input_mode == "waldo" and args.ee == "brainco" else [],
                         },
                         "body": {
                             "qpos": current_body_state,
@@ -767,6 +815,22 @@ if __name__ == '__main__':
                         }
                     else:
                         states["head"] = {
+                            "position": [0.0, 0.0, 0.0],
+                            "rotation": [[0.0]*3]*3,
+                            "pose_matrix": [[0.0]*4]*4,
+                            "detected": False,
+                        }
+                    # apriltag surround pose
+                    surround_pose, surround_detected = surround_tracker.get_pose()
+                    if surround_pose is not None:
+                        states["surround"] = {
+                            "position": surround_pose[:3, 3].tolist(),
+                            "rotation": surround_pose[:3, :3].tolist(),
+                            "pose_matrix": surround_pose.tolist(),
+                            "detected": surround_detected,
+                        }
+                    else:
+                        states["surround"] = {
                             "position": [0.0, 0.0, 0.0],
                             "rotation": [[0.0]*3]*3,
                             "pose_matrix": [[0.0]*4]*4,
@@ -855,6 +919,16 @@ if __name__ == '__main__':
                 head_tracker.stop()
         except Exception as e:
             logger_mp.error(f"Failed to stop head tracker: {e}")
+
+        try:
+            surround_tracker.stop()
+        except Exception as e:
+            logger_mp.error(f"Failed to stop surround tracker: {e}")
+
+        try:
+            surround_cam.close()
+        except Exception as e:
+            logger_mp.error(f"Failed to close surround camera: {e}")
 
         try:
             img_client.close()
