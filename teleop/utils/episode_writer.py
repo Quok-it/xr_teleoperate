@@ -11,10 +11,11 @@ import logging_mp
 logger_mp = logging_mp.getLogger(__name__)
 
 class EpisodeWriter():
-    def __init__(self, task_dir, task_goal=None, task_desc = None, task_steps = None, frequency=30, image_size=[640, 480], joint_names=None, rerun_log = True):
+    def __init__(self, task_dir, task_goal=None, task_desc = None, task_steps = None, frequency=30, image_size=[640, 480], joint_names=None, metadata=None, rerun_log = True):
         """
         image_size: [width, height]
         joint_names: dict with keys "left_arm", "left_ee", "right_arm", "right_ee", "body"
+        metadata: optional dict merged into the info section (e.g. camera_config, robot_config)
         """
         logger_mp.info("==> EpisodeWriter initializing...\n")
         self.task_dir = task_dir
@@ -38,6 +39,7 @@ class EpisodeWriter():
             "body": [],
         }
 
+        self.metadata = metadata or {}
         self.rerun_log = rerun_log
         if self.rerun_log:
             logger_mp.info("==> RerunLogger initializing...\n")
@@ -82,9 +84,10 @@ class EpisodeWriter():
                 "tactile_names": {
                     "left_ee": [],
                     "right_ee": [],
-                }, 
+                },
                 "sim_state": ""
             }
+        self.info.update(self.metadata)
 
  
     def create_episode(self):
@@ -112,6 +115,8 @@ class EpisodeWriter():
         os.makedirs(self.color_dir, exist_ok=True)
         os.makedirs(self.depth_dir, exist_ok=True)
         os.makedirs(self.audio_dir, exist_ok=True)
+        self._recording_start_time = time.time()
+        self.info['recording_started_at'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with open(self.json_path, "w", encoding="utf-8") as f:
             f.write('{\n')
             f.write('"info": ' + json.dumps(self.info, ensure_ascii=False, indent=4) + ',\n')
@@ -215,8 +220,15 @@ class EpisodeWriter():
         """
         Save the episode data to a JSON file.
         """
+        duration = round(time.time() - self._recording_start_time, 3)
+        episode_config = {
+            "task_name": self.text.get('goal', ''),
+            "tags": self.metadata.get('tags', []),
+            "duration": duration,
+        }
         with open(self.json_path, "a", encoding="utf-8") as f:
-            f.write("\n]\n}")      # Close the JSON array and object
+            f.write("\n],\n")
+            f.write('"episode_config": ' + json.dumps(episode_config, ensure_ascii=False, indent=4) + '\n}')
 
         self.need_save = False     # Reset the save flag
         self.is_available = True   # Mark the class as available after saving
