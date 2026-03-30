@@ -16,6 +16,8 @@ kTopicbraincoLeftCommand = "rt/brainco/left/cmd"
 kTopicbraincoLeftState = "rt/brainco/left/state"
 kTopicbraincoRightCommand = "rt/brainco/right/cmd"
 kTopicbraincoRightState = "rt/brainco/right/state"
+kTopicbraincoLeftTouch = "rt/brainco/left/touch"
+kTopicbraincoRightTouch = "rt/brainco/right/touch"
 
 # inference_server.py publishes 6 float32 joint angles per hand via ZMQ PUB.
 # revo2 joint order: [thumb_mc, thumb_px, index, middle, ring, pinky]
@@ -42,7 +44,9 @@ class Waldo_Brainco_Controller:
     """
 
     def __init__(self, dual_hand_data_lock=None, dual_hand_state_array=None,
-                 dual_hand_action_array=None, fps=120.0, simulation_mode=False,
+                 dual_hand_action_array=None, dual_hand_dq_array=None,
+                 dual_hand_tau_array=None, dual_hand_touch_array=None,
+                 fps=120.0, simulation_mode=False,
                  right_hand_port=WALDO_RIGHT_HAND_PORT, left_hand_port=WALDO_LEFT_HAND_PORT):
         logger_mp.info("Initialize Waldo_Brainco_Controller...")
         self.fps = fps
@@ -51,6 +55,9 @@ class Waldo_Brainco_Controller:
         self.dual_hand_data_lock = dual_hand_data_lock
         self.dual_hand_state_array = dual_hand_state_array
         self.dual_hand_action_array = dual_hand_action_array
+        self.dual_hand_dq_array = dual_hand_dq_array
+        self.dual_hand_tau_array = dual_hand_tau_array
+        self.dual_hand_touch_array = dual_hand_touch_array
         self.running = True
         self._idle = True
 
@@ -76,10 +83,23 @@ class Waldo_Brainco_Controller:
         self.RightHandState_subscriber = ChannelSubscriber(kTopicbraincoRightState, MotorStates_)
         self.RightHandState_subscriber.Init()
 
+        # DDS subscribers for touch sensor feedback
+        self.LeftHandTouch_subscriber = ChannelSubscriber(kTopicbraincoLeftTouch, MotorStates_)
+        self.LeftHandTouch_subscriber.Init()
+        self.RightHandTouch_subscriber = ChannelSubscriber(kTopicbraincoRightTouch, MotorStates_)
+        self.RightHandTouch_subscriber.Init()
+
         # current motor state from DDS feedback
         self._state_lock = threading.Lock()
         self._left_hand_state = np.zeros(brainco_Num_Motors, dtype=np.float64)
         self._right_hand_state = np.zeros(brainco_Num_Motors, dtype=np.float64)
+        self._left_hand_dq = np.zeros(brainco_Num_Motors, dtype=np.float64)
+        self._right_hand_dq = np.zeros(brainco_Num_Motors, dtype=np.float64)
+        self._left_hand_tau = np.zeros(brainco_Num_Motors, dtype=np.float64)
+        self._right_hand_tau = np.zeros(brainco_Num_Motors, dtype=np.float64)
+        # touch: 5 fingers x 4 values (normal, tangential, direction, proximity)
+        self._left_hand_touch = np.zeros(20, dtype=np.float64)
+        self._right_hand_touch = np.zeros(20, dtype=np.float64)
 
         # initialize DDS cmd messages
         self.left_hand_msg = MotorCmds_()
@@ -127,22 +147,37 @@ class Waldo_Brainco_Controller:
     def _subscribe_hand_state(self):
         """Read motor state feedback from DDS (runs in background thread)."""
         while self.running:
-            #TODO: uncomment once fixed
-            #left_msg = self.LeftHandState_subscriber.Read()
+            left_msg = self.LeftHandState_subscriber.Read()
             right_msg = self.RightHandState_subscriber.Read()
             self.hand_sub_ready = True
-            #TODO: uncomment once fixed
-            '''if left_msg is not None and right_msg is not None:
+            if left_msg is not None:
                 with self._state_lock:
                     for idx, jid in enumerate(Brainco_Left_Hand_JointIndex):
                         self._left_hand_state[idx] = left_msg.states[jid].q
-                    for idx, jid in enumerate(Brainco_Right_Hand_JointIndex):
-                        self._right_hand_state[idx] = right_msg.states[jid].q
-            '''
+                        self._left_hand_dq[idx] = left_msg.states[jid].dq
+                        self._left_hand_tau[idx] = left_msg.states[jid].tau_est
             if right_msg is not None:
-                with self._state_lock: 
+                with self._state_lock:
                     for idx, jid in enumerate(Brainco_Right_Hand_JointIndex):
                         self._right_hand_state[idx] = right_msg.states[jid].q
+                        self._right_hand_dq[idx] = right_msg.states[jid].dq
+                        self._right_hand_tau[idx] = right_msg.states[jid].tau_est
+            # read touch sensor data
+            left_touch_msg = self.LeftHandTouch_subscriber.Read()
+            right_touch_msg = self.RightHandTouch_subscriber.Read()
+            with self._state_lock:
+                if left_touch_msg is not None:
+                    for i in range(5):
+                        self._left_hand_touch[i*4]   = left_touch_msg.states[i].q
+                        self._left_hand_touch[i*4+1] = left_touch_msg.states[i].dq
+                        self._left_hand_touch[i*4+2] = left_touch_msg.states[i].ddq
+                        self._left_hand_touch[i*4+3] = left_touch_msg.states[i].tau_est
+                if right_touch_msg is not None:
+                    for i in range(5):
+                        self._right_hand_touch[i*4]   = right_touch_msg.states[i].q
+                        self._right_hand_touch[i*4+1] = right_touch_msg.states[i].dq
+                        self._right_hand_touch[i*4+2] = right_touch_msg.states[i].ddq
+                        self._right_hand_touch[i*4+3] = right_touch_msg.states[i].tau_est
             time.sleep(0.002)
 
     def _subscribe_zmq(self):
@@ -215,6 +250,9 @@ class Waldo_Brainco_Controller:
                 # read current motor state from DDS feedback
                 with self._state_lock:
                     state_data = np.concatenate((self._left_hand_state.copy(), self._right_hand_state.copy()))
+                    dq_data = np.concatenate((self._left_hand_dq.copy(), self._right_hand_dq.copy()))
+                    tau_data = np.concatenate((self._left_hand_tau.copy(), self._right_hand_tau.copy()))
+                    touch_data = np.concatenate((self._left_hand_touch.copy(), self._right_hand_touch.copy()))
 
                 # build action data for recording (normalized [0,1] values)
                 action_data = np.concatenate((left_q_target, right_q_target))
@@ -224,6 +262,12 @@ class Waldo_Brainco_Controller:
                     with self.dual_hand_data_lock:
                         self.dual_hand_state_array[:] = state_data
                         self.dual_hand_action_array[:] = action_data
+                        if self.dual_hand_dq_array is not None:
+                            self.dual_hand_dq_array[:] = dq_data
+                        if self.dual_hand_tau_array is not None:
+                            self.dual_hand_tau_array[:] = tau_data
+                        if self.dual_hand_touch_array is not None:
+                            self.dual_hand_touch_array[:] = touch_data
 
                 if not self._zmq_connected:
                     continue

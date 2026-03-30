@@ -142,7 +142,7 @@ class RerunLogger:
         # Log states
         states = item_data.get('states', {}) or {}
         for part, state_info in states.items():
-            if part != "body" and state_info:
+            if part != "body" and isinstance(state_info, dict) and state_info:
                 values = state_info.get('qpos', [])
                 for idx, val in enumerate(values):
                     rr.log(f"{self.prefix}{part}/states/qpos/{idx}", rr.Scalar(val))
@@ -150,7 +150,7 @@ class RerunLogger:
         # Log actions
         actions = item_data.get('actions', {}) or {}
         for part, action_info in actions.items():
-            if part != "body" and action_info:
+            if part != "body" and isinstance(action_info, dict) and action_info:
                 values = action_info.get('qpos', [])
                 for idx, val in enumerate(values):
                     rr.log(f"{self.prefix}{part}/actions/qpos/{idx}", rr.Scalar(val))

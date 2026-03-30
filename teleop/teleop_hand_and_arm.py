@@ -2,6 +2,8 @@ import time
 import argparse
 from multiprocessing import Value, Array, Lock
 import threading
+import cv2
+import numpy as np
 import logging_mp
 logging_mp.basicConfig(level=logging_mp.INFO)
 logger_mp = logging_mp.getLogger(__name__)
@@ -639,7 +641,14 @@ if __name__ == '__main__':
                     colors = {}
                     depths = {}
                     if camera_config['head_camera'].get('enable_depth') and head_depth is not None:
+                        # raw uint16 depth (lossless via .png)
                         depths['depth_0'] = head_depth
+                        # colorized RGB for visualization
+                        depth_clipped = np.clip(head_depth, 0, 3000)
+                        depth_norm = (depth_clipped * (255.0 / 3000)).astype(np.uint8)
+                        depth_colored = cv2.applyColorMap(depth_norm, cv2.COLORMAP_TURBO)
+                        depth_colored[head_depth == 0] = 0
+                        depths['depth_0_rgb'] = depth_colored
                     if head_img is not None and head_img.bgr is not None:
                         colors[f"color_{0}"] = head_img.bgr
                     else:
