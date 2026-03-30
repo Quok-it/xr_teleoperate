@@ -50,8 +50,8 @@ jobs:
         shell: bash -el {0}
         run: |
           # Non-editable installs so paths are in site-packages (relocatable)
-          pip install 'vuer[all]==0.0.60'
-          pip install ./teleop/televuer
+          pip install 'vuer[all]==0.0.60' aiohttp aiohttp-cors
+          pip install --no-deps ./teleop/televuer
           pip install ./teleop/teleimager
           pip install ./teleop/robot_control/dex-retargeting
 
