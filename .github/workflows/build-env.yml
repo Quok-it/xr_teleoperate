@@ -54,6 +54,7 @@ jobs:
           # Install vuer WITHOUT [all] extras — aiohttp is conda-managed.
           # televuer declares vuer[all] which would make pip reinstall
           # aiohttp from PyPI and break the conda version.
+          pip install params-proto==2.13.2
           pip install vuer==0.0.60
           pip install --no-deps ./teleop/televuer
 
