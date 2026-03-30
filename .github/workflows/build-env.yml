@@ -61,6 +61,20 @@ jobs:
         shell: bash -el {0}
         run: pip install -r requirements.txt
 
+      - name: Debug vuer import
+        shell: bash -el {0}
+        run: |
+          python -c "import aiohttp; print(f'aiohttp {aiohttp.__version__}')"
+          python -c "
+          try:
+              from vuer.server import Vuer, VuerSession
+              print('vuer.server OK')
+          except ImportError as e:
+              import traceback
+              print(f'REAL ERROR: {e}')
+              traceback.print_exc()
+          "
+
       - name: Verify environment
         shell: bash -el {0}
         run: |
