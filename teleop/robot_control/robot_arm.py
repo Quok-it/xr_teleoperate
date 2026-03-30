@@ -89,6 +89,12 @@ class G1_29_ArmController:
         self._gradual_start_time = None
         self._gradual_time = None
 
+        # measured frequency tracking
+        self._state_tick_count = 0
+        self._state_tick_start = None
+        self._ctrl_tick_count = 0
+        self._ctrl_tick_start = None
+
         if self.motion_mode:
             self.lowcmd_publisher = ChannelPublisher(kTopicLowCommand_Motion, hg_LowCmd)
         else:
@@ -151,6 +157,10 @@ class G1_29_ArmController:
         while True:
             msg = self.lowstate_subscriber.Read()
             if msg is not None:
+                now = time.time()
+                self._state_tick_count += 1
+                if self._state_tick_start is None:
+                    self._state_tick_start = now
                 lowstate = G1_29_LowState()
                 lowstate.tick = msg.tick
                 for id in range(G1_29_Num_Motors):
@@ -175,6 +185,9 @@ class G1_29_ArmController:
 
         while True:
             start_time = time.time()
+            self._ctrl_tick_count += 1
+            if self._ctrl_tick_start is None:
+                self._ctrl_tick_start = start_time
 
             with self.ctrl_lock:
                 arm_q_target     = self.q_target
@@ -188,7 +201,7 @@ class G1_29_ArmController:
             for idx, id in enumerate(G1_29_JointArmIndex):
                 self.msg.motor_cmd[id].q = cliped_arm_q_target[idx]
                 self.msg.motor_cmd[id].dq = 0
-                self.msg.motor_cmd[id].tau = arm_tauff_target[idx]   
+                self.msg.motor_cmd[id].tau = arm_tauff_target[idx]
 
             self.msg.crc = self.crc.Crc(self.msg)
             self.lowcmd_publisher.Write(self.msg)
@@ -201,8 +214,6 @@ class G1_29_ArmController:
             all_t_elapsed = current_time - start_time
             sleep_time = max(0, (self.control_dt - all_t_elapsed))
             time.sleep(sleep_time)
-            # logger_mp.debug(f"arm_velocity_limit:{self.arm_velocity_limit}")
-            # logger_mp.debug(f"sleep_time:{sleep_time}")
 
     def ctrl_dual_arm(self, q_target, tauff_target):
         '''Set control target values q & tau of the left and right arm motors.'''
@@ -210,10 +221,20 @@ class G1_29_ArmController:
             self.q_target = q_target
             self.tauff_target = tauff_target
 
+    @property
+    def measured_state_hz(self):
+        elapsed = time.time() - self._state_tick_start if self._state_tick_start else 0
+        return round(self._state_tick_count / elapsed, 1) if elapsed > 0 else 0.0
+
+    @property
+    def measured_control_hz(self):
+        elapsed = time.time() - self._ctrl_tick_start if self._ctrl_tick_start else 0
+        return round(self._ctrl_tick_count / elapsed, 1) if elapsed > 0 else 0.0
+
     def get_mode_machine(self):
         '''Return current dds mode machine.'''
         return self.lowstate_subscriber.Read().mode_machine
-    
+
     def get_current_motor_q(self):
         '''Return current state q of all body motors.'''
         return np.array([self.lowstate_buffer.GetData().motor_state[id].q for id in G1_29_JointIndex])
@@ -245,7 +266,7 @@ class G1_29_ArmController:
     def ctrl_dual_arm_go_home(self):
         '''Move both the left and right arms of the robot to their home position.'''
         logger_mp.info("[G1_29_ArmController] ctrl_dual_arm_go_home start...")
-        max_attempts = 100
+        max_attempts = 60
         current_attempts = 0
         # [L_sp, L_sr, L_sy, L_e, L_wr, L_wp, L_wy,
         #  R_sp, R_sr, R_sy, R_e, R_wr, R_wp, R_wy]
@@ -264,7 +285,7 @@ class G1_29_ArmController:
         with self.ctrl_lock:
             self.q_target = home_q
             # self.tauff_target = np.zeros(14)
-        tolerance = 0.05
+        tolerance = 0.1
         while current_attempts < max_attempts:
             current_q = self.get_current_dual_arm_q()
             if np.all(np.abs(current_q - home_q) < tolerance):
@@ -405,7 +426,12 @@ class G1_23_ArmController:
         self._gradual_start_time = None
         self._gradual_time = None
 
-        
+        # measured frequency tracking
+        self._state_tick_count = 0
+        self._state_tick_start = None
+        self._ctrl_tick_count = 0
+        self._ctrl_tick_start = None
+
         if self.motion_mode:
             self.lowcmd_publisher = ChannelPublisher(kTopicLowCommand_Motion, hg_LowCmd)
         else:
@@ -468,6 +494,10 @@ class G1_23_ArmController:
         while True:
             msg = self.lowstate_subscriber.Read()
             if msg is not None:
+                now = time.time()
+                self._state_tick_count += 1
+                if self._state_tick_start is None:
+                    self._state_tick_start = now
                 lowstate = G1_23_LowState()
                 for id in range(G1_23_Num_Motors):
                     lowstate.motor_state[id].q       = msg.motor_state[id].q
@@ -490,6 +520,9 @@ class G1_23_ArmController:
 
         while True:
             start_time = time.time()
+            self._ctrl_tick_count += 1
+            if self._ctrl_tick_start is None:
+                self._ctrl_tick_start = start_time
 
             with self.ctrl_lock:
                 arm_q_target     = self.q_target
@@ -525,10 +558,20 @@ class G1_23_ArmController:
             self.q_target = q_target
             self.tauff_target = tauff_target
 
+    @property
+    def measured_state_hz(self):
+        elapsed = time.time() - self._state_tick_start if self._state_tick_start else 0
+        return round(self._state_tick_count / elapsed, 1) if elapsed > 0 else 0.0
+
+    @property
+    def measured_control_hz(self):
+        elapsed = time.time() - self._ctrl_tick_start if self._ctrl_tick_start else 0
+        return round(self._ctrl_tick_count / elapsed, 1) if elapsed > 0 else 0.0
+
     def get_mode_machine(self):
         '''Return current dds mode machine.'''
         return self.lowstate_subscriber.Read().mode_machine
-    
+
     def get_current_motor_q(self):
         '''Return current state q of all body motors.'''
         return np.array([self.lowstate_buffer.GetData().motor_state[id].q for id in G1_23_JointIndex])
@@ -552,12 +595,12 @@ class G1_23_ArmController:
     def ctrl_dual_arm_go_home(self):
         '''Move both the left and right arms of the robot to their home position by setting the target joint angles (q) and torques (tau) to zero.'''
         logger_mp.info("[G1_23_ArmController] ctrl_dual_arm_go_home start...")
-        max_attempts = 100
+        max_attempts = 60
         current_attempts = 0
         with self.ctrl_lock:
             self.q_target = np.zeros(10)
             # self.tauff_target = np.zeros(10)
-        tolerance = 0.05  # Tolerance threshold for joint angles to determine "close to zero", can be adjusted based on your motor's precision requirements
+        tolerance = 0.1
         while current_attempts < max_attempts:
             current_q = self.get_current_dual_arm_q()
             if np.all(np.abs(current_q) < tolerance):
@@ -568,7 +611,7 @@ class G1_23_ArmController:
                 logger_mp.info("[G1_23_ArmController] both arms have reached the home position.")
                 break
             current_attempts += 1
-            time.sleep(0.05)
+            time.sleep(0.02)
 
     def speed_gradual_max(self, t = 5.0):
         '''Parameter t is the total time required for arms velocity to gradually increase to its maximum value, in seconds. The default is 5.0.'''
@@ -690,6 +733,11 @@ class H1_2_ArmController:
         self._gradual_start_time = None
         self._gradual_time = None
 
+        # measured frequency tracking
+        self._state_tick_count = 0
+        self._state_tick_start = None
+        self._ctrl_tick_count = 0
+        self._ctrl_tick_start = None
 
         if self.motion_mode:
             self.lowcmd_publisher = ChannelPublisher(kTopicLowCommand_Motion, hg_LowCmd)
@@ -753,6 +801,10 @@ class H1_2_ArmController:
         while True:
             msg = self.lowstate_subscriber.Read()
             if msg is not None:
+                now = time.time()
+                self._state_tick_count += 1
+                if self._state_tick_start is None:
+                    self._state_tick_start = now
                 lowstate = H1_2_LowState()
                 for id in range(H1_2_Num_Motors):
                     lowstate.motor_state[id].q       = msg.motor_state[id].q
@@ -775,6 +827,9 @@ class H1_2_ArmController:
 
         while True:
             start_time = time.time()
+            self._ctrl_tick_count += 1
+            if self._ctrl_tick_start is None:
+                self._ctrl_tick_start = start_time
 
             with self.ctrl_lock:
                 arm_q_target     = self.q_target
@@ -810,10 +865,20 @@ class H1_2_ArmController:
             self.q_target = q_target
             self.tauff_target = tauff_target
 
+    @property
+    def measured_state_hz(self):
+        elapsed = time.time() - self._state_tick_start if self._state_tick_start else 0
+        return round(self._state_tick_count / elapsed, 1) if elapsed > 0 else 0.0
+
+    @property
+    def measured_control_hz(self):
+        elapsed = time.time() - self._ctrl_tick_start if self._ctrl_tick_start else 0
+        return round(self._ctrl_tick_count / elapsed, 1) if elapsed > 0 else 0.0
+
     def get_mode_machine(self):
         '''Return current dds mode machine.'''
         return self.lowstate_subscriber.Read().mode_machine
-    
+
     def get_current_motor_q(self):
         '''Return current state q of all body motors.'''
         return np.array([self.lowstate_buffer.GetData().motor_state[id].q for id in H1_2_JointIndex])
@@ -979,6 +1044,12 @@ class H1_ArmController:
         self._gradual_start_time = None
         self._gradual_time = None
 
+        # measured frequency tracking
+        self._state_tick_count = 0
+        self._state_tick_start = None
+        self._ctrl_tick_count = 0
+        self._ctrl_tick_start = None
+
         self.lowcmd_publisher = ChannelPublisher(kTopicLowCommand_Debug, go_LowCmd)
         self.lowcmd_publisher.Init()
         self.lowstate_subscriber = ChannelSubscriber(kTopicLowState, go_LowState)
@@ -1032,6 +1103,10 @@ class H1_ArmController:
         while True:
             msg = self.lowstate_subscriber.Read()
             if msg is not None:
+                now = time.time()
+                self._state_tick_count += 1
+                if self._state_tick_start is None:
+                    self._state_tick_start = now
                 lowstate = H1_LowState()
                 for id in range(H1_Num_Motors):
                     lowstate.motor_state[id].q       = msg.motor_state[id].q
@@ -1051,6 +1126,9 @@ class H1_ArmController:
     def _ctrl_motor_state(self):
         while True:
             start_time = time.time()
+            self._ctrl_tick_count += 1
+            if self._ctrl_tick_start is None:
+                self._ctrl_tick_start = start_time
 
             with self.ctrl_lock:
                 arm_q_target     = self.q_target
@@ -1085,7 +1163,17 @@ class H1_ArmController:
         with self.ctrl_lock:
             self.q_target = q_target
             self.tauff_target = tauff_target
-    
+
+    @property
+    def measured_state_hz(self):
+        elapsed = time.time() - self._state_tick_start if self._state_tick_start else 0
+        return round(self._state_tick_count / elapsed, 1) if elapsed > 0 else 0.0
+
+    @property
+    def measured_control_hz(self):
+        elapsed = time.time() - self._ctrl_tick_start if self._ctrl_tick_start else 0
+        return round(self._ctrl_tick_count / elapsed, 1) if elapsed > 0 else 0.0
+
     def get_current_motor_q(self):
         '''Return current state q of all body motors.'''
         return np.array([self.lowstate_buffer.GetData().motor_state[id].q for id in H1_JointIndex])

@@ -4,6 +4,7 @@ import json
 import datetime
 import numpy as np
 import time
+import shutil
 from .rerun_visualizer import RerunLogger
 from queue import Queue, Empty
 from threading import Thread
@@ -11,9 +12,11 @@ import logging_mp
 logger_mp = logging_mp.getLogger(__name__)
 
 class EpisodeWriter():
-    def __init__(self, task_dir, task_goal=None, task_desc = None, task_steps = None, frequency=30, image_size=[640, 480], rerun_log = True):
+    def __init__(self, task_dir, task_goal=None, task_desc = None, task_steps = None, frequency=30, image_size=[640, 480], joint_names=None, metadata=None, rerun_log = True):
         """
         image_size: [width, height]
+        joint_names: dict with keys "left_arm", "left_ee", "right_arm", "right_ee", "body"
+        metadata: optional dict merged into the info section (e.g. camera_config, robot_config)
         """
         logger_mp.info("==> EpisodeWriter initializing...\n")
         self.task_dir = task_dir
@@ -31,7 +34,13 @@ class EpisodeWriter():
 
         self.frequency = frequency
         self.image_size = image_size
+        self.joint_names = joint_names or {
+            "left_arm": [], "left_ee": [],
+            "right_arm": [], "right_ee": [],
+            "body": [],
+        }
 
+        self.metadata = metadata or {}
         self.rerun_log = rerun_log
         if self.rerun_log:
             logger_mp.info("==> RerunLogger initializing...\n")
@@ -71,20 +80,15 @@ class EpisodeWriter():
                 "image": {"width":self.image_size[0], "height":self.image_size[1], "fps":self.frequency},
                 "depth": {"width":self.image_size[0], "height":self.image_size[1], "fps":self.frequency},
                 "audio": {"sample_rate": 16000, "channels": 1, "format":"PCM", "bits":16},    # PCM_S16
-                "joint_names":{
-                    "left_arm":   [],
-                    "left_ee":  [],
-                    "right_arm":  [],
-                    "right_ee": [],
-                    "body":       [],
-                },
+                "joint_names": self.joint_names,
 
                 "tactile_names": {
                     "left_ee": [],
                     "right_ee": [],
-                }, 
+                },
                 "sim_state": ""
             }
+        self.info.update(self.metadata)
 
  
     def create_episode(self):
@@ -112,6 +116,8 @@ class EpisodeWriter():
         os.makedirs(self.color_dir, exist_ok=True)
         os.makedirs(self.depth_dir, exist_ok=True)
         os.makedirs(self.audio_dir, exist_ok=True)
+        self._recording_start_time = time.time()
+        self.info['recording_started_at'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with open(self.json_path, "w", encoding="utf-8") as f:
             f.write('{\n')
             f.write('"info": ' + json.dumps(self.info, ensure_ascii=False, indent=4) + ',\n')
@@ -132,6 +138,7 @@ class EpisodeWriter():
         # Create the item data dictionary
         item_data = {
             'idx': self.item_id,
+            'timestamp_ns': time.time_ns(),
             'colors': colors,
             'depths': depths,
             'states': states,
@@ -177,7 +184,8 @@ class EpisodeWriter():
         # Save depths
         if depths:
             for idx_depth, (depth_key, depth) in enumerate(depths.items()):
-                depth_name = f'{str(idx).zfill(6)}_{depth_key}.jpg'
+                ext = '.jpg' if depth.ndim == 3 else '.png'
+                depth_name = f'{str(idx).zfill(6)}_{depth_key}{ext}'
                 if not cv2.imwrite(os.path.join(self.depth_dir, depth_name), depth):
                     logger_mp.info(f"Failed to save depth image.")
                 item_data['depths'][depth_key] = os.path.join('depths', depth_name)
@@ -213,12 +221,36 @@ class EpisodeWriter():
         """
         Save the episode data to a JSON file.
         """
+        duration = round(time.time() - self._recording_start_time, 3)
+        episode_config = {
+            "task_name": self.text.get('goal', ''),
+            "tags": self.metadata.get('tags', []),
+            "duration": duration,
+        }
         with open(self.json_path, "a", encoding="utf-8") as f:
-            f.write("\n]\n}")      # Close the JSON array and object
+            f.write("\n],\n")
+            f.write('"episode_config": ' + json.dumps(episode_config, ensure_ascii=False, indent=4) + '\n}')
 
         self.need_save = False     # Reset the save flag
         self.is_available = True   # Mark the class as available after saving
         logger_mp.info(f"==> Episode saved successfully to {self.json_path}.")
+
+    def delete_last_episode(self):
+        if not self.is_available:
+            logger_mp.warning("Cannot delete while recording is in progress.")
+            return False
+        if self.episode_id < 1:
+            logger_mp.warning("No episodes to delete.")
+            return False
+        episode_dir = os.path.join(self.task_dir, f"episode_{str(self.episode_id).zfill(4)}")
+        if os.path.exists(episode_dir):
+            shutil.rmtree(episode_dir)
+            logger_mp.info(f"==> Deleted episode: {episode_dir}")
+            self.episode_id -= 1
+            return True
+        else:
+            logger_mp.warning(f"Episode directory not found: {episode_dir}")
+            return False
 
     def close(self):
         """
