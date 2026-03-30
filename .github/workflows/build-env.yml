@@ -49,18 +49,13 @@ jobs:
       - name: Install submodule packages
         shell: bash -el {0}
         run: |
-          # Non-editable installs so paths are in site-packages (relocatable)
           pip install ./teleop/robot_control/dex-retargeting
-          pip install --no-deps ./teleop/teleimager
-          pip install --no-deps ./teleop/televuer
+          pip install ./teleop/teleimager
+          pip install ./teleop/televuer
 
       - name: Install remaining requirements
         shell: bash -el {0}
         run: pip install -r requirements.txt
-
-      - name: Install vuer with aiohttp (must be last to avoid being clobbered)
-        shell: bash -el {0}
-        run: pip install 'vuer[all]==0.0.60' aiohttp aiohttp-cors
 
       - name: Verify environment
         shell: bash -el {0}
