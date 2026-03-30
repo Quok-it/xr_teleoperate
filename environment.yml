@@ -1,0 +1,10 @@
+name: waldo
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pinocchio=3.1.0
+  - numpy=1.26.4
+  - conda-pack
+  - libstdcxx-ng  # C++ runtime for native extensions
