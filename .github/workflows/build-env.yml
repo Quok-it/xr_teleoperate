@@ -51,7 +51,11 @@ jobs:
         run: |
           pip install ./teleop/robot_control/dex-retargeting
           pip install ./teleop/teleimager
-          pip install ./teleop/televuer
+          # Install vuer WITHOUT [all] extras — aiohttp is conda-managed.
+          # televuer declares vuer[all] which would make pip reinstall
+          # aiohttp from PyPI and break the conda version.
+          pip install vuer==0.0.60
+          pip install --no-deps ./teleop/televuer
 
       - name: Install remaining requirements
         shell: bash -el {0}
