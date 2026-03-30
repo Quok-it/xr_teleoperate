@@ -20,7 +20,6 @@ from teleop.robot_control.robot_arm import G1_29_ArmController, G1_23_ArmControl
 from teleop.robot_control.robot_arm_ik import G1_29_ArmIK, G1_23_ArmIK, H1_2_ArmIK, H1_ArmIK
 from teleimager.image_client import ImageClient
 from teleop.utils.episode_writer import EpisodeWriter
-from teleop.utils.surround_camera import SurroundCamera
 from teleop.utils.ipc import IPC_Server
 from teleop.utils.motion_switcher import MotionSwitcher, LocoClientWrapper
 from sshkeyboard import listen_keyboard, stop_listening
@@ -123,28 +122,6 @@ if __name__ == '__main__':
         camera_config = img_client.get_cam_config()
         logger_mp.debug(f"Camera config: {camera_config}")
 
-        # apriltag head tracker
-        head_tracker = None
-        intr = camera_config['head_camera'].get('intrinsics')
-        if intr:
-            from teleop.utils.apriltag_tracker import AprilTagTracker
-            head_tracker = AprilTagTracker(
-                camera_params=(intr['fx'], intr['fy'], intr['cx'], intr['cy']),
-            )
-            logger_mp.info("AprilTag head tracker initialized.")
-        else:
-            logger_mp.warning("No camera intrinsics in cam_config — AprilTag head tracking disabled.")
-
-        # surrounding camera (local RealSense D405)
-        surround_cam = SurroundCamera()
-        logger_mp.info("Surrounding camera initialized.")
-        from teleop.utils.apriltag_tracker import AprilTagTracker
-        surround_tracker = AprilTagTracker(
-            camera_params=(surround_cam.intrinsics['fx'], surround_cam.intrinsics['fy'],
-                           surround_cam.intrinsics['cx'], surround_cam.intrinsics['cy']),
-        )
-        logger_mp.info("AprilTag surround tracker initialized.")
-
         xr_need_local_img = not (args.display_mode == 'pass-through' or camera_config['head_camera']['enable_webrtc'])
 
         # televuer_wrapper: obtain hand pose data from the XR device and transmit the robot's head camera image to the XR device.
@@ -222,7 +199,7 @@ if __name__ == '__main__':
                 hand_ctrl = Inspire_Controller_FTP(left_hand_pos_array, right_hand_pos_array, dual_hand_data_lock, dual_hand_state_array, dual_hand_action_array, simulation_mode=args.sim)
             elif args.ee == "brainco":
                 from teleop.robot_control.robot_hand_brainco import Brainco_Controller
-                left_hand_pos_array = None  # no left hand connected
+                left_hand_pos_array = Array('d', 75, lock = True)
                 right_hand_pos_array = Array('d', 75, lock = True)
                 dual_hand_data_lock = Lock()
                 dual_hand_state_array = Array('d', 12, lock = False)
@@ -277,14 +254,10 @@ if __name__ == '__main__':
                 dual_hand_data_lock = Lock()
                 dual_hand_state_array = Array('d', 12, lock=False)   # [output] left(6) + right(6) hand state
                 dual_hand_action_array = Array('d', 12, lock=False)  # [output] left(6) + right(6) hand action
-                dual_hand_dq_array = Array('d', 12, lock=False)      # [output] left(6) + right(6) hand velocity
-                dual_hand_tau_array = Array('d', 12, lock=False)     # [output] left(6) + right(6) hand current
                 hand_ctrl = Waldo_Brainco_Controller(
                     dual_hand_data_lock=dual_hand_data_lock,
                     dual_hand_state_array=dual_hand_state_array,
                     dual_hand_action_array=dual_hand_action_array,
-                    dual_hand_dq_array=dual_hand_dq_array,
-                    dual_hand_tau_array=dual_hand_tau_array,
                     simulation_mode=args.sim,
                 )
             else:
@@ -366,39 +339,6 @@ if __name__ == '__main__':
             ee_names = EE_JOINT_NAMES.get(args.ee, {"left_ee": [], "right_ee": []})
             joint_names = {**arm_names, **ee_names, "body": []}
 
-            # build metadata from camera_config and args
-            head_cam_cfg = camera_config.get('head_camera', {})
-            camera_metadata = {
-                "id": "head_camera",
-                "serial_number": head_cam_cfg.get('serial_number'),
-                "frame": "world",
-                "color_intrinsics": head_cam_cfg.get('color_intrinsics'),
-                "depth_intrinsics": head_cam_cfg.get('depth_intrinsics'),
-                "depth_scale": head_cam_cfg.get('depth_scale'),
-            }
-            surround_metadata = {
-                "id": "surround_camera",
-                "serial_number": surround_cam.serial,
-                "frame": "world",
-                "color_intrinsics": surround_cam.color_intrinsics,
-                "depth_intrinsics": surround_cam.depth_intrinsics,
-                "depth_scale": surround_cam.depth_scale,
-            }
-            metadata = {
-                "robot_config": {
-                    "arm_type": args.arm,
-                    "ee_type": args.ee,
-                    "control_frequency": args.frequency,
-                    "img_server_ip": args.img_server_ip,
-                },
-                "camera_config": {
-                    "width": cam_w,
-                    "height": cam_h,
-                    "fps": head_cam_cfg.get('fps', args.frequency),
-                    "cameras": [camera_metadata, surround_metadata],
-                },
-            }
-
             recorder = EpisodeWriter(task_dir = os.path.join(args.task_dir, args.task_name),
                                      task_goal = args.task_goal,
                                      task_desc = args.task_desc,
@@ -406,7 +346,6 @@ if __name__ == '__main__':
                                      frequency = args.frequency,
                                      image_size = [cam_w, cam_h],
                                      joint_names = joint_names,
-                                     metadata = metadata,
                                      rerun_log = not args.headless)
 
         logger_mp.info("----------------------------------------------------------------")
@@ -447,25 +386,13 @@ if __name__ == '__main__':
             if camera_config['head_camera']['enable_zmq']:
                 if args.record or xr_need_local_img:
                     head_img = img_client.get_head_frame()
-                    if xr_need_local_img:
-                        tv_wrapper.render_to_xr(head_img)
+                    tv_wrapper.render_to_xr(head_img)
             if camera_config['head_camera'].get('enable_depth') and args.record:
                 try:
                     head_depth = img_client.get_head_depth_frame()
                 except Exception as e:
                     logger_mp.warning(f"[Depth] get_head_depth_frame failed: {e}")
                     head_depth = None
-            # feed frame to apriltag head tracker
-            if head_tracker is not None and head_img is not None and head_img.bgr is not None:
-                head_tracker.update_frame(head_img.bgr)
-
-            # get surrounding camera image
-            surround_img = surround_cam.get_frame()
-            surround_depth = surround_cam.get_depth_frame()
-            # feed frame to apriltag surround tracker
-            if surround_img is not None and surround_img.bgr is not None:
-                surround_tracker.update_frame(surround_img.bgr)
-
             #if camera_config['left_wrist_camera']['enable_zmq']:
              #   if args.record:
               #      left_wrist_img = img_client.get_left_wrist_frame()
@@ -477,18 +404,6 @@ if __name__ == '__main__':
             if args.record and RECORD_TOGGLE:
                 RECORD_TOGGLE = False
                 if not RECORD_RUNNING:
-                    # snapshot measured frequencies into robot metadata
-                    metadata['robot_config']['control_frequency'] = arm_ctrl.measured_control_hz
-                    metadata['robot_config']['state_frequency'] = arm_ctrl.measured_state_hz
-                    # snapshot AprilTag extrinsic into camera metadata
-                    if head_tracker is not None:
-                        pose, detected = head_tracker.get_pose()
-                        if pose is not None:
-                            metadata['camera_config']['cameras'][0]['extrinsics'] = pose.tolist()
-                    surround_pose, surround_detected = surround_tracker.get_pose()
-                    if surround_pose is not None:
-                        metadata['camera_config']['cameras'][1]['extrinsics'] = surround_pose.tolist()
-                    recorder.info.update(metadata)
                     if recorder.create_episode():
                         RECORD_RUNNING = True
                         if args.input_mode == "waldo":
@@ -512,11 +427,9 @@ if __name__ == '__main__':
             if args.input_mode != "waldo":
                 # get xr's tele data
                 tele_data = tv_wrapper.get_tele_data()
-                logger_mp.info(f"L_wrist: {tele_data.left_wrist_pose[:3,3].round(3)}  R_wrist: {tele_data.right_wrist_pose[:3,3].round(3)}  R_hand_nz: {np.count_nonzero(tele_data.right_hand_pos)}")
                 if (args.ee == "dex3" or args.ee == "inspire_dfx" or args.ee == "inspire_ftp" or args.ee == "brainco") and args.input_mode == "hand":
-                    if left_hand_pos_array is not None:
-                        with left_hand_pos_array.get_lock():
-                            left_hand_pos_array[:] = tele_data.left_hand_pos.flatten()
+                    with left_hand_pos_array.get_lock():
+                        left_hand_pos_array[:] = tele_data.left_hand_pos.flatten()
                     with right_hand_pos_array.get_lock():
                         right_hand_pos_array[:] = tele_data.right_hand_pos.flatten()
                 elif args.ee == "dex1" and args.input_mode == "controller":
@@ -564,7 +477,7 @@ if __name__ == '__main__':
                 time_ik_start = time.time()
                 sol_q, sol_tauff  = arm_ik.solve_ik(tele_data.left_wrist_pose, tele_data.right_wrist_pose, current_lr_arm_q, current_lr_arm_dq)
                 time_ik_end = time.time()
-                logger_mp.info(f"ik:{round(time_ik_end - time_ik_start, 4)}s  sol_q_elbows:[{sol_q[3]:.3f},{sol_q[10]:.3f}]  cur_q_elbows:[{current_lr_arm_q[3]:.3f},{current_lr_arm_q[10]:.3f}]  vel_limit:{arm_ctrl.arm_velocity_limit:.1f}")
+                logger_mp.debug(f"ik:\t{round(time_ik_end - time_ik_start, 6)}")
                 arm_ctrl.ctrl_dual_arm(sol_q, sol_tauff)
             else:
                 # Waldo arms: no main-loop work needed. Waldo_Arm_Controller runs its own
@@ -672,10 +585,6 @@ if __name__ == '__main__':
                             right_ee_state = dual_hand_state_array[-6:]
                             left_hand_action = dual_hand_action_array[:6]
                             right_hand_action = dual_hand_action_array[-6:]
-                            left_ee_dq = list(dual_hand_dq_array[:6])
-                            right_ee_dq = list(dual_hand_dq_array[-6:])
-                            left_ee_tau = list(dual_hand_tau_array[:6])
-                            right_ee_tau = list(dual_hand_tau_array[-6:])
 
                     current_body_state = []
                     current_body_action = []
@@ -744,17 +653,6 @@ if __name__ == '__main__':
                         colors[f"color_{0}"] = head_img.bgr
                     else:
                         logger_mp.warning("Head image is None!")
-                    # surrounding camera
-                    if surround_img is not None and surround_img.bgr is not None:
-                        colors["color_1"] = surround_img.bgr
-                    if surround_depth is not None:
-                        depths['depth_1'] = surround_depth
-                        # D405: depth_scale≈0.0001, 1m = 10000 raw units
-                        depth_clipped_s = np.clip(surround_depth, 0, 30000)
-                        depth_norm_s = (depth_clipped_s * (255.0 / 30000)).astype(np.uint8)
-                        depth_colored_s = cv2.applyColorMap(depth_norm_s, cv2.COLORMAP_TURBO)
-                        depth_colored_s[surround_depth == 0] = 0
-                        depths['depth_1_rgb'] = depth_colored_s
                     states = {
                         "left_arm": {
                             "qpos":               left_arm_state.tolist(),
@@ -786,56 +684,20 @@ if __name__ == '__main__':
                         },
                         "left_ee": {
                             "qpos":   left_ee_state,
-                            "qvel":   left_ee_dq if args.input_mode == "waldo" and args.ee == "brainco" else [],
-                            "torque": left_ee_tau if args.input_mode == "waldo" and args.ee == "brainco" else [],
+                            "qvel":   [],
+                            "torque": [],
                         },
                         "right_ee": {
                             "qpos":   right_ee_state,
-                            "qvel":   right_ee_dq if args.input_mode == "waldo" and args.ee == "brainco" else [],
-                            "torque": right_ee_tau if args.input_mode == "waldo" and args.ee == "brainco" else [],
+                            "qvel":   [],
+                            "torque": [],
                         },
                         "body": {
                             "qpos": current_body_state,
                         },
-                        "head": {},
                         "output_id": follower_tick,
                         "output_timestamp": follower_timestamp,
                     }
-                    # apriltag head pose
-                    if head_tracker is not None:
-                        head_pose, head_detected = head_tracker.get_pose()
-                    else:
-                        head_pose, head_detected = None, False
-                    if head_pose is not None:
-                        states["head"] = {
-                            "position": head_pose[:3, 3].tolist(),
-                            "rotation": head_pose[:3, :3].tolist(),
-                            "pose_matrix": head_pose.tolist(),
-                            "detected": head_detected,
-                        }
-                    else:
-                        states["head"] = {
-                            "position": [0.0, 0.0, 0.0],
-                            "rotation": [[0.0]*3]*3,
-                            "pose_matrix": [[0.0]*4]*4,
-                            "detected": False,
-                        }
-                    # apriltag surround pose
-                    surround_pose, surround_detected = surround_tracker.get_pose()
-                    if surround_pose is not None:
-                        states["surround"] = {
-                            "position": surround_pose[:3, 3].tolist(),
-                            "rotation": surround_pose[:3, :3].tolist(),
-                            "pose_matrix": surround_pose.tolist(),
-                            "detected": surround_detected,
-                        }
-                    else:
-                        states["surround"] = {
-                            "position": [0.0, 0.0, 0.0],
-                            "rotation": [[0.0]*3]*3,
-                            "pose_matrix": [[0.0]*4]*4,
-                            "detected": False,
-                        }
                     actions = {
                         "left_arm": {
                             "qpos":               left_arm_action.tolist(),
@@ -914,22 +776,6 @@ if __name__ == '__main__':
         except Exception as e:
             logger_mp.error(f"Failed to stop keyboard listener or ipc server: {e}")
         
-        try:
-            if head_tracker is not None:
-                head_tracker.stop()
-        except Exception as e:
-            logger_mp.error(f"Failed to stop head tracker: {e}")
-
-        try:
-            surround_tracker.stop()
-        except Exception as e:
-            logger_mp.error(f"Failed to stop surround tracker: {e}")
-
-        try:
-            surround_cam.close()
-        except Exception as e:
-            logger_mp.error(f"Failed to close surround camera: {e}")
-
         try:
             img_client.close()
         except Exception as e:

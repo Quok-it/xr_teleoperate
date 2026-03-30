@@ -1,6 +1,7 @@
 from teleop.robot_control.robot_arm import G1_29_ArmController, G1_29_JointArmIndex, G1_29_JointIndex
 
 import numpy as np
+import os
 import pinocchio as pin
 import zmq
 import threading
@@ -10,6 +11,9 @@ import logging_mp
 logger_mp = logging_mp.getLogger(__name__)
 
 ARM_NUM_JOINTS = 14
+
+# Left arm home: all zeros except elbow at 90 degrees
+LEFT_HOME_Q = np.array([0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 0.0], dtype=np.float64)
 
 # stream_arm_zmq.py publishes 14x float32 joint angles (radians) via ZMQ PUB
 # in sequential order: left[0:7] + right[7:14]
@@ -51,6 +55,11 @@ class Waldo_Arm_Controller:
         self._frame_count = 0
         self._sol_timestamp = 0.0
 
+        # state ddq via finite difference (firmware doesn't populate motor_state.ddq)
+        self._prev_dq = np.zeros(ARM_NUM_JOINTS, dtype=np.float64)
+        self._prev_dq_time = 0.0
+        self._state_ddq = np.zeros(ARM_NUM_JOINTS, dtype=np.float64)
+
         # DDS arm controller (handles motor commands, state feedback, velocity clipping)
         self.arm_ctrl = G1_29_ArmController(motion_mode=motion_mode, simulation_mode=simulation_mode)
 
@@ -58,17 +67,45 @@ class Waldo_Arm_Controller:
         from teleop.robot_control.arm_pink_real import load_model
         self._rnea_model, self._rnea_data, self._left_frame_id, self._right_frame_id, model_full = load_model()
 
-        # Fixed transform: FK base (pelvis) → head camera (d435).
+        # Fixed transform: FK base (pelvis) → head camera optical frame.
         # The reduced model locks waist at neutral, so this is constant.
+        # d435_link uses robotics convention (X-fwd, Y-left, Z-up);
+        # we compose with R_optical_link to output in optical convention
+        # (X-right, Y-down, Z-forward), matching depth/AprilTag frames.
         data_full = model_full.createData()
         q_neutral = pin.neutral(model_full)
         pin.forwardKinematics(model_full, data_full, q_neutral)
         pin.updateFramePlacements(model_full, data_full)
         d435_id = model_full.getFrameId("d435_link")
-        T_base_cam = data_full.oMf[d435_id]
-        self._T_cam_base = T_base_cam.inverse()          # SE3
+        T_base_link = data_full.oMf[d435_id]
+        R_optical_link = np.array([[0, -1, 0], [0, 0, -1], [1, 0, 0]], dtype=float)
+        T_optical_link = pin.SE3(R_optical_link, np.zeros(3))
+        T_base_optical = T_base_link * T_optical_link.inverse()
+        self._T_cam_base = T_base_optical.inverse()      # SE3
         self.R_cam_base = np.array(self._T_cam_base.rotation)  # (3,3)
-        logger_mp.info(f"T_cam_base translation: {self._T_cam_base.translation}")
+        logger_mp.info(f"T_cam_base (optical) translation: {self._T_cam_base.translation}")
+
+        # --- BrainCo hand FK for fingertip cartesian positions ---
+        _asset_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'assets', 'brainco_hand')
+        self._hand_l_model = pin.buildModelFromUrdf(os.path.join(_asset_dir, 'brainco_left.urdf'))
+        self._hand_l_data = self._hand_l_model.createData()
+        self._hand_r_model = pin.buildModelFromUrdf(os.path.join(_asset_dir, 'brainco_right.urdf'))
+        self._hand_r_data = self._hand_r_model.createData()
+        self._l_hand_fk_info = self._build_hand_fk_info(self._hand_l_model, 'left')
+        self._r_hand_fk_info = self._build_hand_fk_info(self._hand_r_model, 'right')
+        # Correction rotation: BrainCo base_link axes ≠ G1 wrist_yaw_link axes.
+        # In base_link fingers extend along -Y; in the wrist frame they should
+        # extend along +X.  Left hand: Rz(π/2).  Right hand: same finger
+        # alignment but palm faces the opposite way → Rx(π)·Rz(π/2).
+        _R_left = np.array([[ 0, -1,  0],
+                             [ 1,  0,  0],
+                             [ 0,  0,  1]], dtype=float)
+        _R_right = np.array([[ 0, -1,  0],
+                              [-1,  0,  0],
+                              [ 0,  0, -1]], dtype=float)
+        self._T_wrist_hand_l = pin.SE3(_R_left, np.zeros(3))
+        self._T_wrist_hand_r = pin.SE3(_R_right, np.zeros(3))
+        logger_mp.info("[Waldo_Arm] BrainCo hand FK models loaded.")
 
         # start control loop thread (publishes zeros while idle / waiting for ZMQ)
         self._ctrl_thread = threading.Thread(target=self._control_loop, daemon=True)
@@ -95,6 +132,11 @@ class Waldo_Arm_Controller:
 
     def start(self):
         """Activate: forward ZMQ data to robot."""
+        # re-enable arm SDK (go_home ramps it to 0 in motion_mode)
+        if self.arm_ctrl.motion_mode:
+            self.arm_ctrl.msg.motor_cmd[G1_29_JointIndex.kNotUsedJoint0].q = 1.0
+        # restore velocity (stop() drops it to 1)
+        self.arm_ctrl.arm_velocity_limit = 20.0
         # restore gains for active control
         arm_indices = set(member.value for member in G1_29_JointArmIndex)
         for id in G1_29_JointIndex:
@@ -148,6 +190,7 @@ class Waldo_Arm_Controller:
                     # active: forward ZMQ data
                     with self._zmq_lock:
                         q_target = self._q_target.copy()
+                    # q_target[:7] = LEFT_HOME_Q
 
                 # compute feedforward torques via RNEA
                 v = np.zeros(self._rnea_model.nv)
@@ -185,8 +228,16 @@ class Waldo_Arm_Controller:
         return self.arm_ctrl.get_current_dual_arm_dq()
 
     def get_current_dual_arm_ddq(self):
-        """Return current arm joint accelerations from DDS feedback."""
-        return self.arm_ctrl.get_current_dual_arm_ddq()
+        """Return current arm joint accelerations via finite difference of dq.
+        Firmware doesn't populate motor_state.ddq, so we compute it here."""
+        dq = self.arm_ctrl.get_current_dual_arm_dq()
+        now = time.time()
+        dt = now - self._prev_dq_time
+        if self._prev_dq_time > 0 and dt > 0:
+            self._state_ddq = (dq - self._prev_dq) / dt
+        self._prev_dq = dq.copy()
+        self._prev_dq_time = now
+        return self._state_ddq.copy()
 
     def get_current_dual_arm_tau_est(self):
         """Return current arm estimated torques from DDS feedback."""
@@ -212,7 +263,7 @@ class Waldo_Arm_Controller:
 
     def _fk_wrist_poses(self, q):
         """Run FK and return (left_pos, left_axisangle, right_pos, right_axisangle)
-        in head camera (d435) frame."""
+        in camera optical frame (X-right, Y-down, Z-forward)."""
         pin.forwardKinematics(self._rnea_model, self._rnea_data, q)
         pin.updateFramePlacements(self._rnea_model, self._rnea_data)
         left_cam = self._T_cam_base * self._rnea_data.oMf[self._left_frame_id]
@@ -234,7 +285,7 @@ class Waldo_Arm_Controller:
         return self._fk_wrist_poses(q)
 
     def _rotate_6d(self, v):
-        """Rotate a 6D spatial vector (twist/accel/wrench) from base to camera frame."""
+        """Rotate a 6D spatial vector (twist/accel/wrench) from base to camera optical frame."""
         R = self.R_cam_base
         out = np.empty(6)
         out[:3] = R @ v[:3]
@@ -280,7 +331,7 @@ class Waldo_Arm_Controller:
         """Return 6D cartesian acceleration at current sensed state."""
         q = self.arm_ctrl.get_current_dual_arm_q()
         dq = self.arm_ctrl.get_current_dual_arm_dq()
-        ddq = self.arm_ctrl.get_current_dual_arm_ddq()
+        ddq = self.get_current_dual_arm_ddq()
         return self._fk_wrist_accelerations(q, dq, ddq)
 
     def get_arm_action_cartesian_accel(self):
@@ -290,6 +341,95 @@ class Waldo_Arm_Controller:
             dq = self._sol_dq.copy()
             ddq = self._sol_ddq.copy()
         return self._fk_wrist_accelerations(q, dq, ddq)
+
+    # --- BrainCo hand fingertip FK ---
+
+    @staticmethod
+    def _build_hand_fk_info(model, side):
+        """Build lookup tables for hand FK: actuated q-indices, upper limits, mimic map, tip frame IDs."""
+        actuated_names = [
+            f'{side}_thumb_metacarpal_joint', f'{side}_thumb_proximal_joint',
+            f'{side}_index_proximal_joint', f'{side}_middle_proximal_joint',
+            f'{side}_ring_proximal_joint', f'{side}_pinky_proximal_joint',
+        ]
+        actuated_q_idx = [model.joints[model.getJointId(n)].idx_q for n in actuated_names]
+        upper_limits = np.array([model.upperPositionLimit[i] for i in actuated_q_idx])
+
+        mimic_defs = [
+            (f'{side}_thumb_distal_joint', f'{side}_thumb_proximal_joint', 1.0),
+            (f'{side}_index_distal_joint', f'{side}_index_proximal_joint', 1.155),
+            (f'{side}_middle_distal_joint', f'{side}_middle_proximal_joint', 1.155),
+            (f'{side}_ring_distal_joint', f'{side}_ring_proximal_joint', 1.155),
+            (f'{side}_pinky_distal_joint', f'{side}_pinky_proximal_joint', 1.155),
+        ]
+        mimic_map = []
+        for child_name, parent_name, mult in mimic_defs:
+            child_qi = model.joints[model.getJointId(child_name)].idx_q
+            parent_qi = model.joints[model.getJointId(parent_name)].idx_q
+            mimic_map.append((child_qi, parent_qi, mult))
+
+        tip_names = [f'{side}_thumb_tip', f'{side}_index_tip', f'{side}_middle_tip',
+                     f'{side}_ring_tip', f'{side}_pinky_tip']
+        tip_frame_ids = [model.getFrameId(n, pin.FrameType.BODY) for n in tip_names]
+
+        return {
+            'actuated_q_idx': actuated_q_idx,
+            'upper_limits': upper_limits,
+            'mimic_map': mimic_map,
+            'tip_frame_ids': tip_frame_ids,
+        }
+
+    def _fingertip_positions(self, hand_model, hand_data, info, hand_normalized,
+                             T_cam_wrist, T_wrist_hand):
+        """Compute 5 fingertip XYZ positions in camera frame for one hand.
+        hand_normalized: 6-element [0,1] motor values."""
+        q = pin.neutral(hand_model)
+        q_rad = np.asarray(hand_normalized, dtype=np.float64) * info['upper_limits']
+        for i, qi in enumerate(info['actuated_q_idx']):
+            q[qi] = q_rad[i]
+        for child_qi, parent_qi, mult in info['mimic_map']:
+            q[child_qi] = q[parent_qi] * mult
+        pin.forwardKinematics(hand_model, hand_data, q)
+        pin.updateFramePlacements(hand_model, hand_data)
+        tips = np.empty((5, 3))
+        for i, fid in enumerate(info['tip_frame_ids']):
+            tip_cam = T_cam_wrist * T_wrist_hand * hand_data.oMf[fid]
+            tips[i] = tip_cam.translation
+        return tips
+
+    def get_fingertip_cartesian_pos(self, arm_q, left_hand_norm, right_hand_norm):
+        """Compute 5 fingertip positions per hand in camera optical frame.
+        Args:
+            arm_q: 14-element arm joint positions (for wrist pose via FK)
+            left_hand_norm: 6-element [0,1] normalized left hand motor values
+            right_hand_norm: 6-element [0,1] normalized right hand motor values
+        Returns:
+            (left_tips, right_tips) each (5, 3) ndarray of XYZ in camera optical frame.
+            Tip order: [thumb, index, middle, ring, pinky]
+        """
+        pin.forwardKinematics(self._rnea_model, self._rnea_data, arm_q)
+        pin.updateFramePlacements(self._rnea_model, self._rnea_data)
+        T_cam_lwrist = self._T_cam_base * self._rnea_data.oMf[self._left_frame_id]
+        T_cam_rwrist = self._T_cam_base * self._rnea_data.oMf[self._right_frame_id]
+
+        left_tips = self._fingertip_positions(
+            self._hand_l_model, self._hand_l_data, self._l_hand_fk_info,
+            left_hand_norm, T_cam_lwrist, self._T_wrist_hand_l)
+        right_tips = self._fingertip_positions(
+            self._hand_r_model, self._hand_r_data, self._r_hand_fk_info,
+            right_hand_norm, T_cam_rwrist, self._T_wrist_hand_r)
+        return left_tips, right_tips
+
+    def get_current_fingertip_cartesian_pos(self, left_hand_norm, right_hand_norm):
+        """Fingertip positions using current sensed arm joint state."""
+        q = self.arm_ctrl.get_current_dual_arm_q()
+        return self.get_fingertip_cartesian_pos(q, left_hand_norm, right_hand_norm)
+
+    def get_action_fingertip_cartesian_pos(self, left_hand_norm, right_hand_norm):
+        """Fingertip positions using action arm joint targets."""
+        with self._action_lock:
+            q = self._sol_q.copy()
+        return self.get_fingertip_cartesian_pos(q, left_hand_norm, right_hand_norm)
 
     def get_current_dual_arm_cartesian_external_wrench(self):
         """Return estimated Cartesian external wrench (6D) at each wrist: J^{-T} @ tau_ext."""

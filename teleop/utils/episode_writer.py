@@ -4,6 +4,7 @@ import json
 import datetime
 import numpy as np
 import time
+import shutil
 from .rerun_visualizer import RerunLogger
 from queue import Queue, Empty
 from threading import Thread
@@ -233,6 +234,23 @@ class EpisodeWriter():
         self.need_save = False     # Reset the save flag
         self.is_available = True   # Mark the class as available after saving
         logger_mp.info(f"==> Episode saved successfully to {self.json_path}.")
+
+    def delete_last_episode(self):
+        if not self.is_available:
+            logger_mp.warning("Cannot delete while recording is in progress.")
+            return False
+        if self.episode_id < 1:
+            logger_mp.warning("No episodes to delete.")
+            return False
+        episode_dir = os.path.join(self.task_dir, f"episode_{str(self.episode_id).zfill(4)}")
+        if os.path.exists(episode_dir):
+            shutil.rmtree(episode_dir)
+            logger_mp.info(f"==> Deleted episode: {episode_dir}")
+            self.episode_id -= 1
+            return True
+        else:
+            logger_mp.warning(f"Episode directory not found: {episode_dir}")
+            return False
 
     def close(self):
         """
