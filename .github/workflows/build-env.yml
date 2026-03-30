@@ -62,20 +62,6 @@ jobs:
         shell: bash -el {0}
         run: pip install -r requirements.txt
 
-      - name: Debug vuer import
-        shell: bash -el {0}
-        run: |
-          python -c "import aiohttp; print(f'aiohttp {aiohttp.__version__}')"
-          python -c "
-          try:
-              from vuer.server import Vuer, VuerSession
-              print('vuer.server OK')
-          except ImportError as e:
-              import traceback
-              print(f'REAL ERROR: {e}')
-              traceback.print_exc()
-          "
-
       - name: Verify environment
         shell: bash -el {0}
         run: |
@@ -92,21 +78,13 @@ jobs:
 
       - name: Build distributable tarball
         run: |
-          mkdir -p dist
-
-          mv tv-env.tar.gz dist/
-
-          tar czf dist/xr_teleoperate.tar.gz \
-            --exclude='april_venv' \
+          tar czf tellyop.tar.gz \
             --exclude='teleop/utils/data' \
-            --exclude='*.tar' \
             --exclude='__pycache__' \
-            .
-
-          cp scripts/install.sh dist/
-          chmod +x dist/install.sh
-
-          tar czf tellyop.tar.gz dist/
+            tv-env.tar.gz \
+            scripts/install.sh \
+            teleop/ \
+            requirements.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
