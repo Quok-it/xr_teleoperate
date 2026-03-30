@@ -1,4 +1,4 @@
-name: Build conda-pack environment
+name: Pack and publish tv environment
 
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
         uses: conda-incubator/setup-miniconda@v3
         with:
           miniforge-version: latest
-          activate-environment: waldo
+          activate-environment: tv
           environment-file: environment.yml
           auto-activate-base: false
 
@@ -69,35 +69,31 @@ jobs:
 
       - name: Pack conda environment
         shell: bash -el {0}
-        run: conda-pack -n waldo -o waldo-env.tar.gz --ignore-editable-packages
+        run: conda-pack -n tv -o tv-env.tar.gz --ignore-editable-packages
 
       - name: Build distributable tarball
         run: |
-          mkdir -p waldo-dist
+          mkdir -p dist
 
-          # Packed conda environment
-          mv waldo-env.tar.gz waldo-dist/
+          mv tv-env.tar.gz dist/
 
-          # Application source + assets (exclude recorded data and venv)
-          tar czf waldo-dist/xr_teleoperate.tar.gz \
+          tar czf dist/xr_teleoperate.tar.gz \
             --exclude='april_venv' \
             --exclude='teleop/utils/data' \
             --exclude='*.tar' \
             --exclude='__pycache__' \
             .
 
-          # Install script
-          cp scripts/install.sh waldo-dist/
-          chmod +x waldo-dist/install.sh
+          cp scripts/install.sh dist/
+          chmod +x dist/install.sh
 
-          # Bundle everything
-          tar czf waldo-${{ github.sha }}.tar.gz waldo-dist/
+          tar czf tellyop.tar.gz dist/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: waldo-${{ github.sha }}
-          path: waldo-${{ github.sha }}.tar.gz
+          name: tellyop-${{ github.sha }}
+          path: tellyop.tar.gz
           retention-days: 30
 
       - name: Publish to S3
@@ -107,10 +103,11 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: us-east-1
         run: |
-          aws s3 cp waldo-${{ github.sha }}.tar.gz s3://n1-waldos/tellyop/waldo-${{ github.sha }}.tar.gz
+          aws s3 cp tellyop.tar.gz s3://n1-waldos/tellyop/tellyop-${{ github.sha }}.tar.gz
+          aws s3 cp s3://n1-waldos/tellyop/tellyop-${{ github.sha }}.tar.gz s3://n1-waldos/tellyop/tellyop-latest.tar.gz
 
       - name: Upload to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: waldo-${{ github.sha }}.tar.gz
+          files: tellyop.tar.gz

@@ -1,4 +1,4 @@
-name: waldo
+name: tv
 channels:
   - conda-forge
   - defaults
@@ -9,4 +9,4 @@ dependencies:
   - aiohttp
   - aiohttp-cors
   - conda-pack
-  - libstdcxx-ng  # C++ runtime for native extensions
+  - libstdcxx-ng

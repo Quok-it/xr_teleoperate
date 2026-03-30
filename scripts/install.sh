@@ -10,7 +10,7 @@ mkdir -p "$INSTALL_DIR"
 # Unpack conda environment
 echo "Unpacking Python environment..."
 mkdir -p "$INSTALL_DIR/env"
-tar xzf "$SCRIPT_DIR/waldo-env.tar.gz" -C "$INSTALL_DIR/env"
+tar xzf "$SCRIPT_DIR/tv-env.tar.gz" -C "$INSTALL_DIR/env"
 
 # Fix prefixes for this machine
 echo "Fixing environment prefixes..."
